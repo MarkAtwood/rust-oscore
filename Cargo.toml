@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 Mark Atwood
+
+[package]
+name = "oscore"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MarkAtwood/rust-oscore"
+description = "Pure-Rust no_std OSCORE (RFC 8613) implementation"
+keywords = ["oscore", "coap", "security", "embedded", "iot"]
+categories = ["cryptography", "no-std", "embedded"]
+
+[dependencies]
+# Pure-Rust crypto crates for no_std compatibility
+aes = { version = "0.8", default-features = false, features = ["zeroize"] }
+ccm = { version = "0.5", default-features = false }
+heapless = "0.8"
+hkdf = { version = "0.13", default-features = false }
+hmac = { version = "0.13", default-features = false, features = ["zeroize"] }
+sha2 = { version = "0.11", default-features = false, features = ["zeroize"] }
+subtle = { version = "2.6", default-features = false }
+zeroize = { version = "1.8", default-features = false, features = ["derive"] }
+
+# EDHOC (RFC 9528) Suite 0 - feature-gated since it adds dependencies
+x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "zeroize"], optional = true }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["zeroize"], optional = true }
+rand_core = { version = "0.6", default-features = false, optional = true }
+
+# Logging backends (optional, feature-gated)
+defmt = { version = "0.3", optional = true }
+log = { version = "0.4", default-features = false, optional = true }
+
+[dev-dependencies]
+hex-literal = "0.4"
+rand_core = { version = "0.6", default-features = false, features = ["getrandom", "std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+default = []
+std = ["rand_core?/getrandom"]
+# EDHOC Suite 0 (RFC 9528) for establishing OSCORE contexts
+# Uses X25519/Ed25519 for key exchange
+# rand_core/getrandom enables OsRng for std/tests; no_std users provide custom RNG impl.
+edhoc = ["dep:x25519-dalek", "dep:ed25519-dalek", "dep:rand_core"]
+# Logging: enable one or neither, not both
+defmt = ["dep:defmt"]
+log = ["dep:log"]
+# Test utilities for RFC vector conformance testing (not for production use)
+test-vectors = []

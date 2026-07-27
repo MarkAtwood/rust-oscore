@@ -1,0 +1,372 @@
+{
+  "$schema": "./schema.json",
+  "format_version": 2,
+  "name": "oscore",
+  "description": "OSCORE (RFC 8613) test vectors for key derivation, request/response protection, and replay detection.",
+  "spec": "https://www.rfc-editor.org/rfc/rfc8613",
+  "vectors": [
+    {
+      "name": "rfc8613_c1_key_derivation_client_with_salt",
+      "type": "key_derivation",
+      "description": "RFC 8613 Appendix C.1.1: Client key derivation with master salt (sender_id empty)",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "expected": {
+        "sender_key": "f0910ed7295e6ad4b54fc793154302ff",
+        "recipient_key": "ffb14e093c94c9cac9471648b4f98710",
+        "common_iv": "4622d4dd6d944168eefb54987c"
+      }
+    },
+    {
+      "name": "rfc8613_c1_key_derivation_server_with_salt",
+      "type": "key_derivation",
+      "description": "RFC 8613 Appendix C.1.2: Server key derivation with master salt (sender_id=0x01)",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "01",
+      "recipient_id": "",
+      "id_context": null,
+      "algorithm": 10,
+      "expected": {
+        "sender_key": "ffb14e093c94c9cac9471648b4f98710",
+        "recipient_key": "f0910ed7295e6ad4b54fc793154302ff",
+        "common_iv": "4622d4dd6d944168eefb54987c"
+      }
+    },
+    {
+      "name": "rfc8613_c2_key_derivation_client_no_salt",
+      "type": "key_derivation",
+      "description": "RFC 8613 Appendix C.2.1: Client key derivation without master salt",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": null,
+      "sender_id": "00",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "expected": {
+        "sender_key": "321b26943253c7ffb6003b0b64d74041",
+        "recipient_key": "e57b5635815177cd679ab4bcec9d7dda",
+        "common_iv": "be35ae297d2dace910c52e99f9"
+      }
+    },
+    {
+      "name": "rfc8613_c2_key_derivation_server_no_salt",
+      "type": "key_derivation",
+      "description": "RFC 8613 Appendix C.2.2: Server key derivation without master salt",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": null,
+      "sender_id": "01",
+      "recipient_id": "00",
+      "id_context": null,
+      "algorithm": 10,
+      "expected": {
+        "sender_key": "e57b5635815177cd679ab4bcec9d7dda",
+        "recipient_key": "321b26943253c7ffb6003b0b64d74041",
+        "common_iv": "be35ae297d2dace910c52e99f9"
+      }
+    },
+    {
+      "name": "rfc8613_c3_key_derivation_client_with_id_context",
+      "type": "key_derivation",
+      "description": "RFC 8613 Appendix C.3.1: Client key derivation with ID Context",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "",
+      "recipient_id": "01",
+      "id_context": "37cbf3210017a2d3",
+      "algorithm": 10,
+      "expected": {
+        "sender_key": "af2a1300a5e95788b356336eeecd2b92",
+        "recipient_key": "e39a0c7c77b43f03b4b39ab9a268699f",
+        "common_iv": "2ca58fb85ff1b81c0b7181b85e"
+      }
+    },
+    {
+      "name": "rfc8613_c3_key_derivation_server_with_id_context",
+      "type": "key_derivation",
+      "description": "RFC 8613 Appendix C.3.2: Server key derivation with ID Context",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "01",
+      "recipient_id": "",
+      "id_context": "37cbf3210017a2d3",
+      "algorithm": 10,
+      "expected": {
+        "sender_key": "e39a0c7c77b43f03b4b39ab9a268699f",
+        "recipient_key": "af2a1300a5e95788b356336eeecd2b92",
+        "common_iv": "2ca58fb85ff1b81c0b7181b85e"
+      }
+    },
+    {
+      "name": "rfc8613_c4_request_protection",
+      "type": "request_protection",
+      "description": "RFC 8613 Appendix C.4: OSCORE request protection (GET /tv1)",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "sender_seq": 20,
+      "plaintext": {
+        "code": 1,
+        "options": "b3747631",
+        "payload": ""
+      },
+      "expected": {
+        "nonce": "4622d4dd6d944168eefb549868",
+        "oscore_option": "0914",
+        "ciphertext": "612f1092f1776f1c1668b3825e"
+      }
+    },
+    {
+      "name": "rfc8613_c5_request_protection_no_salt",
+      "type": "request_protection",
+      "description": "RFC 8613 Appendix C.5: OSCORE request without master salt (GET /tv1)",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": null,
+      "sender_id": "00",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "sender_seq": 20,
+      "plaintext": {
+        "code": 1,
+        "options": "b3747631",
+        "payload": ""
+      },
+      "expected": {
+        "nonce": "bf35ae297d2dace910c52e99ed",
+        "oscore_option": "091400",
+        "ciphertext": "4ed339a5a379b0b8bc731fffb0"
+      }
+    },
+    {
+      "name": "rfc8613_c6_request_protection_with_id_context",
+      "type": "request_protection",
+      "description": "RFC 8613 Appendix C.6: OSCORE request with ID Context (GET /tv1)",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "",
+      "recipient_id": "01",
+      "id_context": "37cbf3210017a2d3",
+      "algorithm": 10,
+      "sender_seq": 20,
+      "plaintext": {
+        "code": 1,
+        "options": "b3747631",
+        "payload": ""
+      },
+      "expected": {
+        "nonce": "2ca58fb85ff1b81c0b7181b84a",
+        "oscore_option": "19140837cbf3210017a2d3",
+        "ciphertext": "72cd7273fd331ac45cffbe55c3"
+      }
+    },
+    {
+      "name": "rfc8613_c7_response_protection",
+      "type": "response_protection",
+      "description": "RFC 8613 Appendix C.7: OSCORE response (2.05 Content, 'Hello World!')",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "01",
+      "recipient_id": "",
+      "id_context": null,
+      "algorithm": 10,
+      "sender_seq": 0,
+      "include_piv": false,
+      "request_piv": "14",
+      "request_kid": "",
+      "plaintext": {
+        "code": 69,
+        "options": "",
+        "payload": "48656c6c6f20576f726c6421"
+      },
+      "expected": {
+        "nonce": "4622d4dd6d944168eefb549868",
+        "oscore_option": "",
+        "ciphertext": "dbaad1e9a7e7b2a813d3c31524378303cdafae119106"
+      }
+    },
+    {
+      "name": "rfc8613_c8_response_with_partial_iv",
+      "type": "response_protection",
+      "description": "RFC 8613 Appendix C.8: OSCORE response with a new Partial IV",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "01",
+      "recipient_id": "",
+      "id_context": null,
+      "algorithm": 10,
+      "sender_seq": 0,
+      "include_piv": true,
+      "request_piv": "14",
+      "request_kid": "",
+      "plaintext": {
+        "code": 69,
+        "options": "",
+        "payload": "48656c6c6f20576f726c6421"
+      },
+      "expected": {
+        "nonce": "4722d4dd6d944169eefb54987c",
+        "oscore_option": "0100",
+        "ciphertext": "4d4c13669384b67354b2b6175ff4b8658c666a6cf88e"
+      }
+    },
+    {
+      "name": "roundtrip_simple_request",
+      "type": "roundtrip",
+      "description": "Simple request round-trip: protect then unprotect",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "00",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "sender_seq": 0,
+      "plaintext": {
+        "code": 1,
+        "options": "",
+        "payload": "68656c6c6f"
+      }
+    },
+    {
+      "name": "roundtrip_request_with_payload",
+      "type": "roundtrip",
+      "description": "Request round-trip with CoAP POST and payload",
+      "master_secret": "deadbeefcafebabedeadbeefcafebabe",
+      "master_salt": "0011223344556677",
+      "sender_id": "aa",
+      "recipient_id": "bb",
+      "id_context": null,
+      "algorithm": 10,
+      "sender_seq": 42,
+      "plaintext": {
+        "code": 2,
+        "options": "",
+        "payload": "7b226d657373616765223a2274657374227d"
+      }
+    },
+    {
+      "name": "replay_window_accept_new",
+      "type": "replay",
+      "description": "New sequence number should be accepted",
+      "highest_seq": 100,
+      "window_bits": 0,
+      "test_seq": 101,
+      "expected": {
+        "is_replay": false,
+        "new_highest": 101,
+        "new_window": 1
+      }
+    },
+    {
+      "name": "replay_window_reject_duplicate",
+      "type": "replay",
+      "description": "Duplicate sequence number should be rejected",
+      "highest_seq": 100,
+      "window_bits": 1,
+      "test_seq": 100,
+      "expected": {
+        "is_replay": true
+      }
+    },
+    {
+      "name": "replay_window_accept_within_window",
+      "type": "replay",
+      "description": "Unseen sequence within window should be accepted",
+      "highest_seq": 100,
+      "window_bits": 1,
+      "test_seq": 99,
+      "expected": {
+        "is_replay": false,
+        "new_highest": 100,
+        "new_window": 3
+      }
+    },
+    {
+      "name": "replay_window_reject_too_old",
+      "type": "replay",
+      "description": "Sequence number outside window should be rejected",
+      "highest_seq": 100,
+      "window_bits": 1,
+      "test_seq": 50,
+      "expected": {
+        "is_replay": true
+      }
+    },
+    {
+      "name": "replay_window_large_jump",
+      "type": "replay",
+      "description": "Large jump forward should clear window",
+      "highest_seq": 100,
+      "window_bits": 4294967295,
+      "test_seq": 200,
+      "expected": {
+        "is_replay": false,
+        "new_highest": 200,
+        "new_window": 1
+      }
+    },
+    {
+      "name": "invalid_id_too_long",
+      "type": "invalid",
+      "description": "Sender ID exceeding 7 bytes should be rejected (nonce capacity)",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": null,
+      "sender_id": "0102030405060708",
+      "recipient_id": "01",
+      "expected_error": "invalid_param"
+    },
+    {
+      "name": "invalid_ciphertext_too_short",
+      "type": "invalid",
+      "description": "Ciphertext shorter than tag length should be rejected",
+      "ciphertext": "0102030405060708",
+      "expected_error": "invalid_param"
+    },
+    {
+      "name": "ssn_restore_c1_after_nvm_failure",
+      "type": "ssn_restore",
+      "description": "SSN restore after simulated NVM failure: context recreated with starting_sequence_number=1000 (RFC 8613 C.1 key material). Nonce is independently verifiable (common_iv XOR padded construct).",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "prior_sequence_number": 99,
+      "starting_sequence_number": 1000,
+      "plaintext": {
+        "code": 1,
+        "options": "b3747631",
+        "payload": ""
+      },
+      "expected": {
+        "nonce": "4622d4dd6d944168eefb549b94",
+        "oscore_option": "0a03e8",
+        "ciphertext": "5444e73c776a1c17218000a59377"
+      }
+    },
+    {
+      "name": "ssn_restore_no_nonce_reuse",
+      "type": "ssn_restore",
+      "description": "No nonce reuse after NVM failure: prior_sequence_number=99 produces nonce 4622d4dd6d944168eefb54981f, restored starting_sequence_number=1000 produces distinct nonce 4622d4dd6d944168eefb549b94. Nonce values are independently verifiable from common_iv and sequence number.",
+      "master_secret": "0102030405060708090a0b0c0d0e0f10",
+      "master_salt": "9e7ca92223786340",
+      "sender_id": "",
+      "recipient_id": "01",
+      "id_context": null,
+      "algorithm": 10,
+      "prior_sequence_number": 99,
+      "starting_sequence_number": 1000,
+      "expected": {
+        "nonce": "4622d4dd6d944168eefb549b94"
+      }
+    }
+  ]
+}
