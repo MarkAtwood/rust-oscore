@@ -208,6 +208,9 @@ impl EdhocInitiator {
     ///
     /// message_1 = (METHOD, SUITES_I, G_X, C_I, ? EAD_1)
     pub fn create_message_1(&mut self) -> Result<heapless::Vec<u8, 64>, EdhocError> {
+        if self.state.lifecycle != Lifecycle::Created {
+            return Err(EdhocError::InvalidState);
+        }
         let mut msg1 = heapless::Vec::<u8, 64>::new();
         msg1.push_err(0)?; // METHOD = 0 (signature/signature)
         msg1.push_err(SUITE_0)?;
@@ -404,7 +407,7 @@ impl EdhocInitiator {
                 build_signature_structure(&id_cred_i, &self.state.th_3, &credential_i, &mac_3)?;
             let signature_3 = self.privkey.sign(&self.pubkey, &m_3);
             let mut ciphertext_3 = SecretVec::<128>::new();
-            encode_bstr(&mut ciphertext_3, self.pubkey.as_bytes())?;
+            ciphertext_3.extend_err(&id_cred_i)?;
             encode_bstr(&mut ciphertext_3, &signature_3)?;
 
             // K_3 and IV_3 for AEAD

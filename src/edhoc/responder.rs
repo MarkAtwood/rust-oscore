@@ -313,7 +313,7 @@ impl EdhocResponder {
 
             let mut plaintext_2 = SecretVec::<128>::new();
             encode_identifier(&mut plaintext_2, &self.c_r)?;
-            encode_bstr(&mut plaintext_2, self.pubkey.as_bytes())?;
+            plaintext_2.extend_err(&id_cred_r)?;
             encode_bstr(&mut plaintext_2, &signature_2)?;
 
             // Encrypt with KEYSTREAM_2

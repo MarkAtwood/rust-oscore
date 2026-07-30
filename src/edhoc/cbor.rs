@@ -170,9 +170,9 @@ pub(crate) fn encode_identifier<const N: usize>(
 ///
 /// SUITES_I can be either:
 /// - A single int (the selected suite)
-/// - An array of ints [...other_supported_suites, selected_suite]
+/// - An array of ints [selected_suite, ...other_supported_suites]
 ///
-/// Per RFC 9528 Section 3.3.2, the LAST element is the selected suite.
+/// Per RFC 9528 Section 3.3.2, the FIRST element is the selected suite.
 /// Returns (selected_suite, bytes_consumed).
 pub(crate) fn parse_suites_i(data: &[u8]) -> Result<(u8, usize), EdhocError> {
     if data.is_empty() {
@@ -209,8 +209,7 @@ pub(crate) fn parse_suites_i(data: &[u8]) -> Result<(u8, usize), EdhocError> {
         return Err(EdhocError::InvalidMessage); // Empty array not valid
     }
 
-    // Iterate through all elements to find the LAST one (selected suite)
-    // and correctly count consumed bytes
+    // Iterate through all elements, capture FIRST as selected suite
     let mut offset = header_size;
     let mut selected: Option<u8> = None;
 
@@ -219,24 +218,72 @@ pub(crate) fn parse_suites_i(data: &[u8]) -> Result<(u8, usize), EdhocError> {
             return Err(EdhocError::InvalidMessage);
         }
         let elem = data[offset];
-        if elem <= 0x17 {
+        // Parse CBOR integer and advance offset
+        let (value, size) = if elem <= 0x17 {
             // Direct int 0-23
-            selected = Some(elem);
-            offset = offset.checked_add(1).ok_or(EdhocError::InvalidMessage)?;
+            (Some(elem), 1)
         } else if elem == 0x18 {
             // 1-byte follow
-            if offset.checked_add(2).ok_or(EdhocError::InvalidMessage)? > data.len() {
+            if offset + 2 > data.len() {
                 return Err(EdhocError::InvalidMessage);
             }
-            selected = Some(data[offset + 1]);
-            offset = offset.checked_add(2).ok_or(EdhocError::InvalidMessage)?;
+            (Some(data[offset + 1]), 2)
+        } else if elem == 0x19 {
+            // 2-byte follow (value > 255, skip for suite selection)
+            if offset + 3 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 3)
+        } else if elem == 0x1a {
+            // 4-byte follow
+            if offset + 5 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 5)
+        } else if elem == 0x1b {
+            // 8-byte follow
+            if offset + 9 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 9)
+        } else if (0x20..=0x37).contains(&elem) {
+            // Negative int -1 to -24 (direct)
+            (None, 1)
+        } else if elem == 0x38 {
+            // Negative 1-byte follow
+            if offset + 2 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 2)
+        } else if elem == 0x39 {
+            // Negative 2-byte follow
+            if offset + 3 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 3)
+        } else if elem == 0x3a {
+            // Negative 4-byte follow
+            if offset + 5 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 5)
+        } else if elem == 0x3b {
+            // Negative 8-byte follow
+            if offset + 9 > data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
+            (None, 9)
         } else {
-            // Unsupported integer encoding for suite values
             return Err(EdhocError::InvalidMessage);
+        };
+
+        // RFC 9528: FIRST element is the selected suite
+        if selected.is_none() {
+            selected = value;
         }
+        offset = offset.checked_add(size).ok_or(EdhocError::InvalidMessage)?;
     }
 
-    // RFC 9528: last element is the selected suite
     match selected {
         Some(suite) => Ok((suite, offset)),
         None => Err(EdhocError::InvalidMessage),
