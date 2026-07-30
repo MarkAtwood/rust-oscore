@@ -23,8 +23,10 @@ subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.8", default-features = false, features = ["derive"] }
 
 # EDHOC (RFC 9528) Suite 0 - feature-gated since it adds dependencies
+# Uses X25519 for key exchange and Schnorr48 for signatures (LICHEN variant)
 x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "zeroize"], optional = true }
-ed25519-dalek = { version = "2.1", default-features = false, features = ["zeroize"], optional = true }
+schnorr48 = { version = "0.1", default-features = false, optional = true }
+curve25519-dalek = { version = "4", default-features = false, optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
 
 # Logging backends (optional, feature-gated)
@@ -41,9 +43,9 @@ serde_json = "1.0"
 default = []
 std = ["rand_core?/getrandom"]
 # EDHOC Suite 0 (RFC 9528) for establishing OSCORE contexts
-# Uses X25519/Ed25519 for key exchange
+# Uses X25519 for key exchange, Schnorr48 for signatures (LICHEN variant)
 # rand_core/getrandom enables OsRng for std/tests; no_std users provide custom RNG impl.
-edhoc = ["dep:x25519-dalek", "dep:ed25519-dalek", "dep:rand_core"]
+edhoc = ["dep:x25519-dalek", "dep:schnorr48", "dep:curve25519-dalek", "dep:rand_core"]
 # Logging: enable one or neither, not both
 defmt = ["dep:defmt"]
 log = ["dep:log"]

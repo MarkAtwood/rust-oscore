@@ -5,19 +5,18 @@
 
 use super::cbor::{encode_identifier, parse_identifier, parse_suites_i};
 use super::credential::{
-    copy_id_cred_value, parse_id_cred, raw_key_credential, validate_deterministic_item,
-    validate_peer_credential, PeerCredential,
+    PeerCredential, copy_id_cred_value, parse_id_cred, raw_key_credential,
+    validate_deterministic_item, validate_peer_credential,
 };
 use super::initiator::EdhocInitiator;
 use super::kdf::edhoc_kdf;
 use super::responder::EdhocResponder;
 use super::transcript::{transcript_3, transcript_4};
 use super::types::{ConnectionId, IdCredReference};
-use super::{EdhocError, Lifecycle, KEY_LEN_32};
+use super::{EdhocError, KEY_LEN_32, Lifecycle};
 use crate::{ContextId, OscoreError, SenderSequenceState, SenderStateStore};
 use aes::Aes128;
 use core::num::NonZeroU32;
-use ed25519_dalek::SigningKey;
 use hex_literal::hex;
 use rand_core::{CryptoRng, RngCore};
 use sha2::Sha256;
@@ -48,10 +47,7 @@ impl TestStore {
 impl SenderStateStore for TestStore {
     type Error = core::convert::Infallible;
 
-    fn load(
-        &mut self,
-        context_id: &ContextId,
-    ) -> Result<Option<SenderSequenceState>, Self::Error> {
+    fn load(&mut self, context_id: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> {
         Ok((*context_id == self.context_id)
             .then_some(self.state)
             .flatten())
@@ -213,7 +209,7 @@ fn test_message_1_creation() {
     assert_eq!(msg1[1], 0); // Suite 0
     assert_eq!(msg1[2], 0x58); // bstr marker
     assert_eq!(msg1[3], 32); // G_X length
-                             // msg1[4..36] is G_X
+    // msg1[4..36] is G_X
     assert_eq!(msg1[36], 0x41); // bstr(1)
     assert_eq!(msg1[37], 5); // C_I
 }
@@ -442,11 +438,10 @@ fn id_cred_rejects_encoded_capacity_overflow() {
 fn pending_messages_expose_id_cred_before_retryable_credential_selection() {
     let mut initiator = initiator([0x11; 32], 0);
     let mut responder = responder([0x22; 32], 1);
-    let initiator_key = initiator.pubkey.to_bytes();
-    let responder_key = responder.pubkey.to_bytes();
-    let wrong_key = SigningKey::from_bytes(&[0x33; 32])
-        .verifying_key()
-        .to_bytes();
+    let initiator_key = initiator.pubkey.as_bytes().clone();
+    let responder_key = responder.pubkey.as_bytes().clone();
+    let (_, wrong_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([0x33; 32]));
+    let wrong_key = *wrong_pubkey.as_bytes();
     let (wrong_id, wrong_credential) = raw_key_credential(&wrong_key).unwrap();
     let (responder_id, responder_credential) = raw_key_credential(&responder_key).unwrap();
     let (initiator_id, initiator_credential) = raw_key_credential(&initiator_key).unwrap();
@@ -497,7 +492,8 @@ fn pending_messages_expose_id_cred_before_retryable_credential_selection() {
 
 #[test]
 fn credentials_accept_bounded_deterministic_cbor_forms() {
-    let public_key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes();
+    let (_, test_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([7; 32]));
+    let public_key = *test_pubkey.as_bytes();
     let (id_cred, ccs) = raw_key_credential(&public_key).unwrap();
     let mut multi_claim_ccs = heapless::Vec::<u8, 96>::new();
     multi_claim_ccs
@@ -506,8 +502,7 @@ fn credentials_accept_bounded_deterministic_cbor_forms() {
     multi_claim_ccs.extend_from_slice(b"iss").unwrap();
     multi_claim_ccs.push(0x08).unwrap();
     multi_claim_ccs.extend_from_slice(&ccs[2..]).unwrap();
-    validate_peer_credential(PeerCredential::new(&public_key, &id_cred, &multi_claim_ccs))
-        .unwrap();
+    validate_peer_credential(PeerCredential::new(&public_key, &id_cred, &multi_claim_ccs)).unwrap();
 
     let mut cwt = heapless::Vec::<u8, 100>::new();
     cwt.extend_from_slice(&[0xd8, 0x3d]).unwrap();
@@ -555,7 +550,8 @@ fn malformed_or_unbound_credentials_are_rejected() {
         Err(EdhocError::InvalidMessage)
     );
 
-    let public_key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes();
+    let (_, test_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([7; 32]));
+    let public_key = *test_pubkey.as_bytes();
     let (id_cred, mut credential) = raw_key_credential(&public_key).unwrap();
     *credential.last_mut().unwrap() ^= 1;
     assert_eq!(
@@ -575,7 +571,7 @@ fn weak_ed25519_keys_are_rejected_and_responder_is_poisoned() {
 
     let mut initiator = initiator([0x11; 32], 0);
     let mut responder = responder([0x22; 32], 1);
-    let responder_key = responder.pubkey.to_bytes();
+    let responder_key = responder.pubkey.as_bytes().clone();
     let message_1 = initiator.create_message_1().unwrap();
     let message_2 = responder.process_message_1(&message_1).unwrap();
     let message_3 = initiator
@@ -591,7 +587,7 @@ fn weak_ed25519_keys_are_rejected_and_responder_is_poisoned() {
         Err(EdhocError::SignatureVerification)
     );
     assert_eq!(responder.state.lifecycle, Lifecycle::Failed);
-    assert_eq!(responder.signing_key.to_bytes(), [0; 32]);
+    assert_eq!(responder.privkey.as_bytes().clone(), [0; 32]);
 }
 
 #[test]
@@ -608,7 +604,7 @@ fn equal_connection_ids_are_rejected_and_poisoned() {
 
     let mut initiator = initiator([0x33; 32], 1);
     let mut responder = responder([0x44; 32], 0);
-    let responder_key = responder.pubkey.to_bytes();
+    let responder_key = responder.pubkey.as_bytes().clone();
     let message_1 = initiator.create_message_1().unwrap();
     let message_2 = responder.process_message_1(&message_1).unwrap();
     initiator.c_i = ConnectionId::from(0);
@@ -654,7 +650,7 @@ fn rejects_unconfigured_ead_trailing_items_and_parses_suite_error() {
     let mut message_2 = responder.process_message_1(&message_1).unwrap();
     message_2.push(0).unwrap();
     assert_eq!(
-        initiator.process_message_2(&message_2, &responder.pubkey.to_bytes()),
+        initiator.process_message_2(&message_2, &responder.pubkey.as_bytes().clone()),
         Err(EdhocError::InvalidMessage)
     );
     assert!(initiator.eph_secret.is_some());
@@ -692,10 +688,9 @@ fn rfc9528_suites_i_literals() {
 #[test]
 fn suites_i_parses_every_signed_integer_width() {
     let suites = [
-        0x8b, 0x17, 0x18, 0x18, 0x19, 0x01, 0x00, 0x1a, 0x00, 0x01, 0x00, 0x00, 0x1b, 0x00,
-        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x20, 0x38, 0x18, 0x39, 0x01, 0x00, 0x3a,
-        0x00, 0x01, 0x00, 0x00, 0x3b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0xff,
+        0x8b, 0x17, 0x18, 0x18, 0x19, 0x01, 0x00, 0x1a, 0x00, 0x01, 0x00, 0x00, 0x1b, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x20, 0x38, 0x18, 0x39, 0x01, 0x00, 0x3a, 0x00, 0x01,
+        0x00, 0x00, 0x3b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
     ];
     assert_eq!(parse_suites_i(&suites), Ok((0, suites.len() - 1)));
 }
@@ -748,7 +743,7 @@ fn export_requires_completed_exchange() {
 fn pre_dh_parse_failures_are_retryable() {
     let mut initiator = initiator([0x11; 32], 0);
     let mut responder = responder([0x22; 32], 1);
-    let responder_pubkey = responder.pubkey.to_bytes();
+    let responder_pubkey = responder.pubkey.as_bytes().clone();
     let msg1 = initiator.create_message_1().unwrap();
 
     assert_eq!(
@@ -766,17 +761,18 @@ fn pre_dh_parse_failures_are_retryable() {
     assert!(responder.eph_secret.is_some());
 
     let msg2 = responder.process_message_1(&msg1).unwrap();
-    assert!(initiator
-        .process_message_2(&msg2, &responder_pubkey)
-        .is_ok());
+    assert!(
+        initiator
+            .process_message_2(&msg2, &responder_pubkey)
+            .is_ok()
+    );
 }
 
 #[test]
 fn initiator_post_dh_failure_wipes_and_poison_state() {
     let mut initiator = initiator([0x11; 32], 0);
-    let peer_key = SigningKey::from_bytes(&[0x22; 32])
-        .verifying_key()
-        .to_bytes();
+    let (_, peer_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([0x22; 32]));
+    let peer_key = *peer_pubkey.as_bytes();
     initiator.create_message_1().unwrap();
     let mut msg2 = heapless::Vec::<u8, 40>::new();
     msg2.extend_from_slice(&[0x58, 33]).unwrap();
@@ -789,7 +785,7 @@ fn initiator_post_dh_failure_wipes_and_poison_state() {
     );
     assert_eq!(initiator.state.lifecycle, Lifecycle::Failed);
     assert!(initiator.eph_secret.is_none());
-    assert_eq!(initiator.signing_key.to_bytes(), [0; KEY_LEN_32]);
+    assert_eq!(initiator.privkey.as_bytes().clone(), [0; KEY_LEN_32]);
     assert_eq!(initiator.state.prk_2e, [0; KEY_LEN_32]);
     assert_eq!(initiator.state.prk_3e2m, [0; KEY_LEN_32]);
     assert_eq!(initiator.state.prk_4e3m, [0; KEY_LEN_32]);
@@ -836,12 +832,12 @@ fn responder_post_dh_failure_wipes_and_poison_state() {
     responder.process_message_1(&msg1).unwrap();
 
     assert_eq!(
-        responder.process_message_3(&[0], &initiator.pubkey.to_bytes()),
+        responder.process_message_3(&[0], &initiator.pubkey.as_bytes().clone()),
         Err(EdhocError::InvalidMessage)
     );
     assert_eq!(responder.state.lifecycle, Lifecycle::Failed);
     assert!(responder.eph_secret.is_none());
-    assert_eq!(responder.signing_key.to_bytes(), [0; KEY_LEN_32]);
+    assert_eq!(responder.privkey.as_bytes().clone(), [0; KEY_LEN_32]);
     assert_eq!(responder.state.prk_2e, [0; KEY_LEN_32]);
     assert_eq!(responder.state.prk_3e2m, [0; KEY_LEN_32]);
     assert_eq!(responder.state.prk_4e3m, [0; KEY_LEN_32]);
@@ -853,7 +849,7 @@ fn responder_post_dh_failure_wipes_and_poison_state() {
         Err(EdhocError::InvalidState)
     );
     assert_eq!(
-        responder.process_message_3(&[0], &initiator.pubkey.to_bytes()),
+        responder.process_message_3(&[0], &initiator.pubkey.as_bytes().clone()),
         Err(EdhocError::InvalidState)
     );
 }
@@ -869,8 +865,8 @@ fn test_full_handshake() {
     let mut responder = EdhocResponder::new(responder_seed, 0x01, &mut rng);
 
     // Get public keys for verification
-    let initiator_pubkey = initiator.pubkey.to_bytes();
-    let responder_pubkey = responder.pubkey.to_bytes();
+    let initiator_pubkey = initiator.pubkey.as_bytes().clone();
+    let responder_pubkey = responder.pubkey.as_bytes().clone();
 
     // Step 1: Initiator creates Message 1
     let msg1 = initiator
@@ -1027,7 +1023,7 @@ fn test_responder_accepts_suites_i_array() {
     msg1.push(0x02).unwrap(); // Suite 2 (also supported)
     msg1.push(0x58).unwrap(); // bstr header
     msg1.push(32).unwrap(); // length 32
-                            // G_X: 32 bytes of ephemeral public key (dummy)
+    // G_X: 32 bytes of ephemeral public key (dummy)
     let g_x = [0xAAu8; 32];
     msg1.extend_from_slice(&g_x).unwrap();
     msg1.push(0x05).unwrap(); // C_I = 5
@@ -1096,7 +1092,7 @@ use serde_json::Value;
 
 fn edhoc_vector(name: &str) -> Value {
     let vectors: Value =
-        serde_json::from_str(include_str!("../../../../test/vectors/edhoc.json")).unwrap();
+        serde_json::from_str(include_str!("../../tests/vectors/edhoc.json")).unwrap();
     vectors["vectors"]
         .as_array()
         .unwrap()
@@ -1140,8 +1136,8 @@ fn test_prk_oscore_interop_vectors() {
         EdhocInitiator::new_with_rng(initiator_seed, 0x00, &mut TestRng(1)).unwrap();
     let mut responder =
         EdhocResponder::new_with_rng(responder_seed, 0x01, &mut TestRng(2)).unwrap();
-    let initiator_pubkey = initiator.pubkey.to_bytes();
-    let responder_pubkey = responder.pubkey.to_bytes();
+    let initiator_pubkey = initiator.pubkey.as_bytes().clone();
+    let responder_pubkey = responder.pubkey.as_bytes().clone();
 
     let msg1 = initiator.create_message_1().unwrap();
     let msg2 = responder.process_message_1(&msg1).unwrap();

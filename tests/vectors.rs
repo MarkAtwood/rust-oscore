@@ -4,7 +4,7 @@
 //! Tests using RFC 8613 test vectors from tests/vectors/oscore.json
 
 use oscore::{
-    validate_option, Context, ContextId, OscoreError, SenderSequenceState, SenderStateStore,
+    Context, ContextId, OscoreError, SenderSequenceState, SenderStateStore, validate_option,
 };
 
 struct TestStore(SenderSequenceState);
@@ -124,10 +124,7 @@ fn context_at(
 }
 
 fn load_vectors() -> VectorFile {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/vectors/oscore.json"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/oscore.json");
     let content = fs::read_to_string(path).expect("Failed to read oscore.json");
     serde_json::from_str(&content).expect("Failed to parse oscore.json")
 }

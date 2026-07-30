@@ -4,7 +4,7 @@
 //! CBOR encoding and parsing helpers for EDHOC messages.
 
 use super::types::{ConnectionId, VecExt};
-use super::{EdhocError, CONNECTION_ID_CAPACITY};
+use super::{CONNECTION_ID_CAPACITY, EdhocError};
 
 /// Encode bytes as deterministic CBOR bstr (major type 2) matching zcbor/cbor2.
 pub(crate) fn encode_bstr<const N: usize>(

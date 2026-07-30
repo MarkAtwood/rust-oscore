@@ -3,7 +3,7 @@
 
 //! Core EDHOC types: connection identifiers, credential references, and buffer helpers.
 
-use super::{EdhocError, CONNECTION_ID_CAPACITY, ID_CRED_MAX_LEN};
+use super::{CONNECTION_ID_CAPACITY, EdhocError, ID_CRED_MAX_LEN};
 use zeroize::Zeroize;
 
 /// An EDHOC connection identifier in its raw byte-string form.

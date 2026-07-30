@@ -3,16 +3,16 @@
 
 //! EDHOC (RFC 9528) Suite 0 implementation for establishing OSCORE contexts.
 //!
-//! Suite 0: X25519 + Ed25519 + AES-CCM-16-64-128 + SHA-256
+//! Suite 0 (LICHEN variant): X25519 + Schnorr48 + AES-CCM-16-64-128 + SHA-256
 //!
 //! # ponytail: minimal Suite 0
 //!
 //! Rolled minimal implementation because:
 //! - lakers only supports Suite 2 (P-256), not Suite 0 (X25519/Ed25519)
-//! - Suite 0 matches LICHEN link-layer Ed25519 (Schnorr48)
+//! - Suite 0 matches LICHEN link-layer Schnorr48
 //! - Python simulator uses Suite 0, so interop requires Suite 0
 //!
-//! Uses existing crates: x25519-dalek, ed25519-dalek, aes/ccm, hkdf/sha2.
+//! Uses existing crates: x25519-dalek, schnorr48, aes/ccm, hkdf/sha2.
 //! Their zeroize features wipe owned secret keys, hash state, and expanded AES schedules on drop.
 //! HMAC 0.13 key setup and HKDF 0.13 expansion also use private call-local arrays which their
 //! APIs do not expose for wiping. Replacing those vetted primitives locally would violate the
@@ -36,11 +36,11 @@ pub use initiator::{EdhocInitiator, PendingMessage2};
 pub use responder::{EdhocResponder, PendingMessage3};
 pub use types::{ConnectionId, IdCred, IdCredReference};
 
-/// X25519/Ed25519 key length.
+/// X25519/Schnorr48 key length.
 pub const KEY_LEN_32: usize = 32;
 
-/// Ed25519 signature length.
-pub const SIG_LEN: usize = 64;
+/// Schnorr48 signature length (16-byte truncated challenge + 32-byte response).
+pub const SIG_LEN: usize = 48;
 
 /// Suite 0 identifier.
 pub const SUITE_0: u8 = 0;

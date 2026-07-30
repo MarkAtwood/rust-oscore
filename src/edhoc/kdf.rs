@@ -3,9 +3,9 @@
 
 //! EDHOC key derivation functions.
 
-use super::types::VecExt;
 use super::EdhocError;
-use crate::{Context, OscoreError, KEY_LEN};
+use super::types::VecExt;
+use crate::{Context, KEY_LEN, OscoreError};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;

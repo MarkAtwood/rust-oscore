@@ -32,9 +32,9 @@ pub use edhoc::{
 
 use aes::Aes128;
 use ccm::{
-    aead::{AeadInPlace, KeyInit},
-    consts::{U13, U8},
     Ccm,
+    aead::{AeadInPlace, KeyInit},
+    consts::{U8, U13},
 };
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
@@ -261,7 +261,7 @@ impl PendingResponse<'_> {
     }
 }
 
-#[allow(dead_code)]  // variants gated by features
+#[allow(dead_code)] // variants gated by features
 enum Construction {
     #[cfg(any(feature = "edhoc", test))]
     Fresh,
@@ -2550,9 +2550,11 @@ mod tests {
 
         let mut store = EmptyStore(None);
         let mut context = context.register_fresh(&mut store).unwrap();
-        assert!(context
-            .protect_response(0x45, &[], b"response", &[0], &[3], true)
-            .is_ok());
+        assert!(
+            context
+                .protect_response(0x45, &[], b"response", &[0], &[3], true)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2572,9 +2574,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(context.sender_sequence_state(), store.state);
-        assert!(context
-            .protect_response(0x45, &[], b"response", &[0], &[3], true)
-            .is_ok());
+        assert!(
+            context
+                .protect_response(0x45, &[], b"response", &[0], &[3], true)
+                .is_ok()
+        );
         assert_eq!(
             context
                 .protect_response(0x45, &[], b"response", &[0], &[3], false)
@@ -2857,9 +2861,10 @@ mod tests {
         let master_secret = hex!("0102030405060708090a0b0c0d0e0f10");
         let mut ctx = Context::restore(&master_secret, None, &[1], &[0], 7, false).unwrap();
 
-        assert!(ctx
-            .protect_response(0x45, &[], b"response", &[0], &[3], true)
-            .is_ok());
+        assert!(
+            ctx.protect_response(0x45, &[], b"response", &[0], &[3], true)
+                .is_ok()
+        );
         assert_eq!(
             ctx.protect_response(0x45, &[], b"response", &[0], &[3], false)
                 .unwrap_err(),
@@ -3574,8 +3579,8 @@ mod tests {
             Context::new_ephemeral(&master_secret, None, &[0x01], &[0x00]).unwrap();
 
         let code = 0x01; // GET
-                         // Class E options with 0xFF embedded in a value:
-                         // Option delta=1, length=2, value=[0xFF, 0x42]
+        // Class E options with 0xFF embedded in a value:
+        // Option delta=1, length=2, value=[0xFF, 0x42]
         let class_e_options = [0x12, 0xFF, 0x42];
         let payload = b"test payload";
 

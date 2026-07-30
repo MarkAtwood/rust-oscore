@@ -6,7 +6,7 @@
 use super::cbor::{encode_bstr, parse_bstr};
 use super::types::{IdCred, IdCredReference, VecExt};
 use super::{EdhocError, ID_CRED_MAX_LEN, KEY_LEN_32};
-use ed25519_dalek::VerifyingKey;
+use curve25519_dalek::{edwards::CompressedEdwardsY, traits::IsIdentity};
 use sha2::{Digest, Sha256};
 
 /// Peer authentication material supplied by the application.
@@ -282,10 +282,13 @@ pub(crate) fn validate_peer_credential(peer: PeerCredential<'_>) -> Result<(), E
     Ok(())
 }
 
-/// Convert raw 32-byte Ed25519 public key bytes into a `VerifyingKey`.
+/// Validate a raw 32-byte public key for Schnorr48.
 ///
-/// Rejects keys on the twist (weak keys) by returning
-/// `EdhocError::SignatureVerification`.
-pub(crate) fn strong_verifying_key(bytes: &[u8; 32]) -> Result<VerifyingKey, EdhocError> {
-    VerifyingKey::from_bytes(bytes).map_err(|_| EdhocError::SignatureVerification)
+/// Rejects identity points, low-order points, and keys not on the curve.
+pub(crate) fn validate_pubkey(bytes: &[u8; 32]) -> Result<(), EdhocError> {
+    // Decompress and validate the point
+    match CompressedEdwardsY(*bytes).decompress() {
+        Some(p) if !p.is_identity() && p.is_torsion_free() => Ok(()),
+        _ => Err(EdhocError::SignatureVerification),
+    }
 }

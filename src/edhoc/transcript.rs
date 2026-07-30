@@ -3,9 +3,9 @@
 
 //! EDHOC transcript hash computation.
 
+use super::EdhocError;
 use super::cbor::{append_cbor_bstr, encode_bstr, encode_identifier};
 use super::types::{ConnectionId, VecExt};
-use super::EdhocError;
 use sha2::{Digest, Sha256};
 
 /// Compute transcript hash: H(input).
