@@ -440,7 +440,7 @@ fn pending_messages_expose_id_cred_before_retryable_credential_selection() {
     let mut responder = responder([0x22; 32], 1);
     let initiator_key = initiator.pubkey.as_bytes().clone();
     let responder_key = responder.pubkey.as_bytes().clone();
-    let (_, wrong_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([0x33; 32]));
+    let (_, wrong_pubkey) = super::sign::SigningKey::from_seed(&[0x33; 32]);
     let wrong_key = *wrong_pubkey.as_bytes();
     let (wrong_id, wrong_credential) = raw_key_credential(&wrong_key).unwrap();
     let (responder_id, responder_credential) = raw_key_credential(&responder_key).unwrap();
@@ -492,7 +492,7 @@ fn pending_messages_expose_id_cred_before_retryable_credential_selection() {
 
 #[test]
 fn credentials_accept_bounded_deterministic_cbor_forms() {
-    let (_, test_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([7; 32]));
+    let (_, test_pubkey) = super::sign::SigningKey::from_seed(&[7; 32]);
     let public_key = *test_pubkey.as_bytes();
     let (id_cred, ccs) = raw_key_credential(&public_key).unwrap();
     let mut multi_claim_ccs = heapless::Vec::<u8, 96>::new();
@@ -550,7 +550,7 @@ fn malformed_or_unbound_credentials_are_rejected() {
         Err(EdhocError::InvalidMessage)
     );
 
-    let (_, test_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([7; 32]));
+    let (_, test_pubkey) = super::sign::SigningKey::from_seed(&[7; 32]);
     let public_key = *test_pubkey.as_bytes();
     let (id_cred, mut credential) = raw_key_credential(&public_key).unwrap();
     *credential.last_mut().unwrap() ^= 1;
@@ -771,7 +771,7 @@ fn pre_dh_parse_failures_are_retryable() {
 #[test]
 fn initiator_post_dh_failure_wipes_and_poison_state() {
     let mut initiator = initiator([0x11; 32], 0);
-    let (_, peer_pubkey) = schnorr48::derive_keypair(&schnorr48::Seed::new([0x22; 32]));
+    let (_, peer_pubkey) = super::sign::SigningKey::from_seed(&[0x22; 32]);
     let peer_key = *peer_pubkey.as_bytes();
     initiator.create_message_1().unwrap();
     let mut msg2 = heapless::Vec::<u8, 40>::new();

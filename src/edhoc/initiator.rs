@@ -13,8 +13,9 @@ use super::transcript::{
     build_context_2, build_context_3, build_signature_structure, transcript_2, transcript_3,
     transcript_4,
 };
+use super::sign::{SigningKey, VerifyingKey, SIG_LEN};
 use super::types::{ConnectionId, IdCred, SecretVec, VecExt};
-use super::{EdhocError, KEY_LEN_32, Lifecycle, SIG_LEN, SUITE_0};
+use super::{EdhocError, KEY_LEN_32, Lifecycle, SUITE_0};
 use crate::{Context, KEY_LEN, NONCE_LEN, OscoreError};
 use aes::Aes128;
 use ccm::{
@@ -23,7 +24,6 @@ use ccm::{
     consts::{U8, U13},
 };
 use rand_core::{CryptoRng, RngCore};
-use schnorr48::{PrivateKey, PublicKey as SchnorrPubKey};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -32,14 +32,14 @@ type AesCcm = Ccm<Aes128, U8, U13>;
 
 /// EDHOC Initiator (client role).
 ///
-/// Implements EDHOC method 0 (SIGN_SIGN) with Suite 0 (LICHEN variant: Schnorr48).
-// SECURITY: PrivateKey and StaticSecret must be zeroized on drop.
-// PrivateKey and StaticSecret implement ZeroizeOnDrop themselves.
+/// Implements EDHOC method 0 (SIGN_SIGN) with Suite 0.
+// SECURITY: SigningKey and StaticSecret must be zeroized on drop.
+// SigningKey and StaticSecret implement ZeroizeOnDrop themselves.
 pub struct EdhocInitiator {
-    /// Our Schnorr48 private key (implements ZeroizeOnDrop).
-    pub(crate) privkey: PrivateKey,
-    /// Our Schnorr48 public key.
-    pub(crate) pubkey: SchnorrPubKey,
+    /// Our signing private key (implements ZeroizeOnDrop).
+    pub(crate) privkey: SigningKey,
+    /// Our signing public key.
+    pub(crate) pubkey: VerifyingKey,
     /// Our connection identifier.
     pub(crate) c_i: ConnectionId,
     /// Ephemeral X25519 secret (implements ZeroizeOnDrop).
@@ -140,8 +140,10 @@ impl ZeroizeOnDrop for EdhocInitiator {}
 
 impl Zeroize for EdhocInitiator {
     fn zeroize(&mut self) {
-        self.privkey = PrivateKey::new([0; KEY_LEN_32]);
-        self.pubkey = SchnorrPubKey::new([0; KEY_LEN_32]);
+        // SigningKey implements ZeroizeOnDrop, but we need to replace it here
+        let (zero_priv, zero_pub) = SigningKey::from_seed(&[0; KEY_LEN_32]);
+        self.privkey = zero_priv;
+        self.pubkey = zero_pub;
         self.eph_secret.zeroize();
         self.state.zeroize();
         self.state.lifecycle = Lifecycle::Zeroized;
@@ -161,8 +163,7 @@ impl EdhocInitiator {
         c_i: C,
         rng: &mut R,
     ) -> Result<Self, OscoreError> {
-        let schnorr_seed = schnorr48::Seed::new(seed);
-        let (privkey, pubkey) = schnorr48::derive_keypair(&schnorr_seed);
+        let (privkey, pubkey) = SigningKey::from_seed(&seed);
 
         let mut eph_seed = Zeroizing::new([0u8; KEY_LEN_32]);
         rng.try_fill_bytes(&mut eph_seed[..])
@@ -184,12 +185,11 @@ impl EdhocInitiator {
     /// Create a new EDHOC initiator.
     ///
     /// # Arguments
-    /// * `seed` - Schnorr48 seed (32 bytes)
+    /// * `seed` - Signing key seed (32 bytes)
     /// * `c_i` - Connection identifier (1 byte)
     /// * `rng` - RNG implementing RngCore + CryptoRng for ephemeral key
     pub fn new<R: RngCore + CryptoRng>(seed: [u8; 32], c_i: u8, rng: &mut R) -> Self {
-        let schnorr_seed = schnorr48::Seed::new(seed);
-        let (privkey, pubkey) = schnorr48::derive_keypair(&schnorr_seed);
+        let (privkey, pubkey) = SigningKey::from_seed(&seed);
 
         let eph_secret = StaticSecret::random_from_rng(rng);
         let eph_public = PublicKey::from(&eph_secret);
@@ -373,11 +373,12 @@ impl EdhocInitiator {
                 &mac_2,
             )?;
             validate_pubkey(peer.public_key)?;
-            let peer_pubkey = SchnorrPubKey::new(*peer.public_key);
+            let peer_pubkey = VerifyingKey::from_bytes(peer.public_key)
+                .ok_or(EdhocError::SignatureVerification)?;
             let signature_2: [u8; SIG_LEN] = signature_bytes
                 .try_into()
                 .map_err(|_| EdhocError::InvalidMessage)?;
-            if !schnorr48::verify(&peer_pubkey, &m_2, &signature_2) {
+            if !peer_pubkey.verify(&m_2, &signature_2) {
                 return Err(EdhocError::SignatureVerification);
             }
 
@@ -401,7 +402,7 @@ impl EdhocInitiator {
             )?;
             let m_3 =
                 build_signature_structure(&id_cred_i, &self.state.th_3, &credential_i, &mac_3)?;
-            let signature_3 = schnorr48::sign(&self.privkey, &self.pubkey, &m_3);
+            let signature_3 = self.privkey.sign(&self.pubkey, &m_3);
             let mut ciphertext_3 = SecretVec::<128>::new();
             encode_bstr(&mut ciphertext_3, self.pubkey.as_bytes())?;
             encode_bstr(&mut ciphertext_3, &signature_3)?;
@@ -470,8 +471,9 @@ impl EdhocInitiator {
     }
 
     pub(crate) fn poison(&mut self) {
-        self.privkey = PrivateKey::new([0; KEY_LEN_32]);
-        self.pubkey = SchnorrPubKey::new([0; KEY_LEN_32]);
+        let (zero_priv, zero_pub) = SigningKey::from_seed(&[0; KEY_LEN_32]);
+        self.privkey = zero_priv;
+        self.pubkey = zero_pub;
         self.eph_secret.zeroize();
         self.state.zeroize();
         self.state.lifecycle = Lifecycle::Failed;

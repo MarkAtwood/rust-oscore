@@ -19,12 +19,12 @@ pub mod seqnum;
 
 pub use error::BufferTooSmall;
 
-#[cfg(feature = "edhoc")]
+#[cfg(any(feature = "edhoc", feature = "edhoc-schnorr48"))]
 pub mod edhoc;
 
 pub use seqnum::OscoreSeqNum;
 
-#[cfg(feature = "edhoc")]
+#[cfg(any(feature = "edhoc", feature = "edhoc-schnorr48"))]
 pub use edhoc::{
     ConnectionId, EdhocError, EdhocInitiator, EdhocResponder, IdCred, IdCredReference,
     PeerCredential, PendingMessage2, PendingMessage3,
@@ -263,7 +263,7 @@ impl PendingResponse<'_> {
 
 #[allow(dead_code)] // variants gated by features
 enum Construction {
-    #[cfg(any(feature = "edhoc", test))]
+    #[cfg(any(feature = "edhoc", feature = "edhoc-schnorr48", test))]
     Fresh,
     #[cfg(test)]
     Ephemeral,
