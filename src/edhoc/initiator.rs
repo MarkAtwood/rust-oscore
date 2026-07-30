@@ -25,7 +25,7 @@ use ccm::{
 };
 use rand_core::{CryptoRng, RngCore};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, Zeroizing};
 
 /// AES-CCM for Suite 0.
 type AesCcm = Ccm<Aes128, U8, U13>;
@@ -100,6 +100,7 @@ impl Zeroize for InitiatorState {
         self.th_3.zeroize();
         self.th_4.zeroize();
         self.msg1.zeroize();
+        self.completed = false;
     }
 }
 
@@ -121,7 +122,11 @@ impl core::fmt::Debug for InitiatorState {
     }
 }
 
-impl ZeroizeOnDrop for InitiatorState {}
+impl Drop for InitiatorState {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
 
 impl core::fmt::Debug for EdhocInitiator {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -136,14 +141,15 @@ impl core::fmt::Debug for EdhocInitiator {
     }
 }
 
-impl ZeroizeOnDrop for EdhocInitiator {}
+impl Drop for EdhocInitiator {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
 
 impl Zeroize for EdhocInitiator {
     fn zeroize(&mut self) {
-        // SigningKey implements ZeroizeOnDrop, but we need to replace it here
-        let (zero_priv, zero_pub) = SigningKey::from_seed(&[0; KEY_LEN_32]);
-        self.privkey = zero_priv;
-        self.pubkey = zero_pub;
+        self.privkey.zeroize();
         self.eph_secret.zeroize();
         self.state.zeroize();
         self.state.lifecycle = Lifecycle::Zeroized;
@@ -474,9 +480,7 @@ impl EdhocInitiator {
     }
 
     pub(crate) fn poison(&mut self) {
-        let (zero_priv, zero_pub) = SigningKey::from_seed(&[0; KEY_LEN_32]);
-        self.privkey = zero_priv;
-        self.pubkey = zero_pub;
+        self.privkey.zeroize();
         self.eph_secret.zeroize();
         self.state.zeroize();
         self.state.lifecycle = Lifecycle::Failed;

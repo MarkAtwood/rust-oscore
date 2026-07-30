@@ -40,8 +40,8 @@ impl Clone for SigningKey {
 #[cfg(not(feature = "edhoc-schnorr48"))]
 impl Zeroize for SigningKey {
     fn zeroize(&mut self) {
-        // ed25519_dalek::SigningKey implements ZeroizeOnDrop internally
-        // We can't easily zeroize it, but it will be wiped on drop
+        // Replace with key from zero seed - old key is dropped and zeroized
+        self.inner = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]);
     }
 }
 

@@ -102,36 +102,298 @@ pub(crate) fn encode_credential<const N: usize>(
     Ok(())
 }
 
-/// Parse an ID_CRED map from deterministic CBOR.
+/// Parse an ID_CRED from deterministic CBOR per RFC 9528.
+///
+/// Accepts:
+/// - Bare integers (compact kid encoding): 0x00-0x17, 0x18 xx, 0x20-0x37, 0x38 xx
+/// - Bare byte strings (compact kid encoding): 0x40-0x57, 0x58 xx
+/// - Maps with 1-8 pairs (0xa1-0xa8)
 ///
 /// Returns (IdCred, bytes_consumed).
 pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> {
-    if data.is_empty() || data[0] != 0xa1 {
-        // Only single-element maps supported
+    if data.is_empty() {
         return Err(EdhocError::InvalidMessage);
     }
-    let mut consumed = 1;
-    if data.len() < consumed + 1 {
+
+    let first = data[0];
+
+    // Handle bare unsigned integer (0x00-0x17) - compact kid encoding
+    if (0x00..=0x17).contains(&first) {
+        let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        encoded.push_err(0xa1)?;
+        encoded.push_err(0x04)?;
+        encoded.push_err(0x41)?;
+        encoded.push_err(first)?;
+        let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        kid_val.push_err(first)?;
+        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 1));
+    }
+
+    // Handle bare negative integer (0x20-0x37) - compact kid encoding
+    if (0x20..=0x37).contains(&first) {
+        let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        encoded.push_err(0xa1)?;
+        encoded.push_err(0x04)?;
+        encoded.push_err(0x41)?;
+        encoded.push_err(first)?;
+        let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        kid_val.push_err(first)?;
+        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 1));
+    }
+
+    // Handle 2-byte unsigned integer (0x18 xx) - compact kid encoding
+    if first == 0x18 {
+        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        encoded.push_err(0xa1)?;
+        encoded.push_err(0x04)?;
+        encoded.push_err(0x42)?;
+        encoded.extend_err(&data[..2])?;
+        let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        kid_val.extend_err(&data[..2])?;
+        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 2));
+    }
+
+    // Handle 2-byte negative integer (0x38 xx) - compact kid encoding
+    if first == 0x38 {
+        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        encoded.push_err(0xa1)?;
+        encoded.push_err(0x04)?;
+        encoded.push_err(0x42)?;
+        encoded.extend_err(&data[..2])?;
+        let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        kid_val.extend_err(&data[..2])?;
+        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 2));
+    }
+
+    // Handle bare byte string (0x40-0x57, 0x58) - compact kid encoding
+    if (0x40..=0x57).contains(&first) || first == 0x58 {
+        let (bstr_val, consumed) = parse_bstr(data)?;
+        let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+        encoded.push_err(0xa1)?;
+        encoded.push_err(0x04)?;
+        encode_bstr(&mut encoded, bstr_val)?;
+        let kid_val = heapless::Vec::from_slice(bstr_val).map_err(|_| EdhocError::BufferTooSmall)?;
+        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, consumed));
+    }
+
+    // Handle maps (0xa1-0xa8)
+    if !(0xa1..=0xa8).contains(&first) {
         return Err(EdhocError::InvalidMessage);
     }
-    let label = data[consumed];
-    consumed += 1;
 
-    // Parse value as bstr (kid or x5t hash)
-    let (value, val_consumed) = parse_bstr(&data[consumed..])?;
-    consumed += val_consumed;
+    let num_pairs = (first - 0xa0) as usize;
+    let mut offset = 1;
+    let mut seen_labels: heapless::Vec<i128, 8> = heapless::Vec::new();
+    let mut kid_value: Option<heapless::Vec<u8, ID_CRED_MAX_LEN>> = None;
+    let mut x5t_value: Option<(i128, heapless::Vec<u8, ID_CRED_MAX_LEN>)> = None;
 
-    let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
-    encoded.extend_err(&data[..consumed])?;
+    for _ in 0..num_pairs {
+        if offset >= data.len() { return Err(EdhocError::InvalidMessage); }
 
-    let reference = match label {
-        4 => IdCredReference::Kid(
-            heapless::Vec::from_slice(value).map_err(|_| EdhocError::BufferTooSmall)?,
-        ),
+        let label_result = try_parse_cbor_int(&data[offset..]);
+        let val_consumed = match label_result {
+            Some((label, label_len)) => {
+                offset += label_len;
+                if seen_labels.contains(&label) { return Err(EdhocError::InvalidMessage); }
+                seen_labels.push(label).map_err(|_| EdhocError::BufferTooSmall)?;
+
+                match label {
+                    1 => skip_int_value(&data[offset..])?,
+                    2 => validate_alg_value(&data[offset..])?,
+                    4 => {
+                        if kid_value.is_some() { return Err(EdhocError::InvalidMessage); }
+                        let (bstr_val, consumed) = parse_canonical_bstr(&data[offset..])?;
+                        kid_value = Some(heapless::Vec::from_slice(bstr_val).map_err(|_| EdhocError::BufferTooSmall)?);
+                        consumed
+                    }
+                    34 => {
+                        if x5t_value.is_some() { return Err(EdhocError::InvalidMessage); }
+                        parse_x5t_value(&data[offset..], &mut x5t_value)?
+                    }
+                    _ => skip_cbor_value(&data[offset..])?
+                }
+            }
+            None => {
+                let key_len = skip_cbor_value(&data[offset..])?;
+                offset += key_len;
+                skip_cbor_value(&data[offset..])?
+            }
+        };
+        offset += val_consumed;
+    }
+
+    let reference = match (kid_value, x5t_value) {
+        (Some(kid), None) => IdCredReference::Kid(kid),
+        (None, Some((alg, hash))) => IdCredReference::X5t { algorithm: alg, hash },
         _ => return Err(EdhocError::InvalidMessage),
     };
 
-    Ok((IdCred { encoded, reference }, consumed))
+    let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
+    encoded.extend_err(&data[..offset])?;
+    Ok((IdCred { encoded, reference }, offset))
+}
+
+fn try_parse_cbor_int(data: &[u8]) -> Option<(i128, usize)> {
+    if data.is_empty() { return None; }
+    let first = data[0];
+    if (0x00..=0x17).contains(&first) { return Some((first as i128, 1)); }
+    if first == 0x18 {
+        if data.len() < 2 || data[1] < 24 { return None; }
+        return Some((data[1] as i128, 2));
+    }
+    if first == 0x19 {
+        if data.len() < 3 { return None; }
+        let val = u16::from_be_bytes([data[1], data[2]]);
+        if val <= 0xff { return None; }
+        return Some((val as i128, 3));
+    }
+    if (0x20..=0x37).contains(&first) {
+        return Some((-((first - 0x20) as i128 + 1), 1));
+    }
+    if first == 0x38 {
+        if data.len() < 2 || data[1] < 24 { return None; }
+        return Some((-(data[1] as i128 + 1), 2));
+    }
+    if first == 0x39 {
+        if data.len() < 3 { return None; }
+        let val = u16::from_be_bytes([data[1], data[2]]);
+        if val <= 0xff { return None; }
+        return Some((-(val as i128 + 1), 3));
+    }
+    None
+}
+
+fn parse_canonical_bstr(data: &[u8]) -> Result<(&[u8], usize), EdhocError> {
+    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    let first = data[0];
+    if (0x40..=0x57).contains(&first) {
+        let len = (first - 0x40) as usize;
+        if data.len() < 1 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok((&data[1..1 + len], 1 + len));
+    }
+    if first == 0x58 {
+        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        let len = data[1] as usize;
+        if len < 24 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok((&data[2..2 + len], 2 + len));
+    }
+    if first == 0x59 {
+        if data.len() < 3 { return Err(EdhocError::InvalidMessage); }
+        let len = u16::from_be_bytes([data[1], data[2]]) as usize;
+        if len <= 0xff { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 3 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok((&data[3..3 + len], 3 + len));
+    }
+    Err(EdhocError::InvalidMessage)
+}
+
+fn skip_int_value(data: &[u8]) -> Result<usize, EdhocError> {
+    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    let first = data[0];
+    if (0x00..=0x17).contains(&first) { return Ok(1); }
+    if first == 0x18 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
+    if first == 0x19 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
+    if (0x20..=0x37).contains(&first) { return Ok(1); }
+    if first == 0x38 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
+    if first == 0x39 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
+    Err(EdhocError::InvalidMessage)
+}
+
+/// Validate alg value: reject arrays containing ambiguous values.
+/// - 1=kty label (also valid kty value, creates ambiguity)
+/// - 34=x5t label (creates ambiguity with x5t header)
+/// - Duplicate values in the array
+fn validate_alg_value(data: &[u8]) -> Result<usize, EdhocError> {
+    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    let first = data[0];
+    // Integer values are always OK
+    if let Ok(len) = skip_int_value(data) { return Ok(len); }
+    // Arrays need inspection for ambiguous values
+    if (0x80..=0x97).contains(&first) {
+        let count = (first - 0x80) as usize;
+        let mut offset = 1;
+        let mut seen_values: heapless::Vec<i128, 8> = heapless::Vec::new();
+        for _ in 0..count {
+            if offset >= data.len() { return Err(EdhocError::InvalidMessage); }
+            if let Some((val, len)) = try_parse_cbor_int(&data[offset..]) {
+                // Reject 1 (kty) and 34 (x5t) as they create ambiguity
+                if val == 1 || val == 34 { return Err(EdhocError::InvalidMessage); }
+                // Reject duplicate values
+                if seen_values.contains(&val) { return Err(EdhocError::InvalidMessage); }
+                seen_values.push(val).map_err(|_| EdhocError::BufferTooSmall)?;
+                offset += len;
+            } else {
+                offset += skip_cbor_value(&data[offset..])?;
+            }
+        }
+        return Ok(offset);
+    }
+    Err(EdhocError::InvalidMessage)
+}
+
+fn parse_cbor_int(data: &[u8]) -> Result<(i128, usize), EdhocError> {
+    try_parse_cbor_int(data).ok_or(EdhocError::InvalidMessage)
+}
+
+fn parse_x5t_value(data: &[u8], out: &mut Option<(i128, heapless::Vec<u8, ID_CRED_MAX_LEN>)>) -> Result<usize, EdhocError> {
+    if data.is_empty() || data[0] != 0x82 { return Err(EdhocError::InvalidMessage); }
+    let mut offset = 1;
+    let (alg, alg_len) = parse_cbor_int(&data[offset..])?;
+    offset += alg_len;
+    let (hash_val, hash_len) = parse_bstr(&data[offset..])?;
+    offset += hash_len;
+    *out = Some((alg, heapless::Vec::from_slice(hash_val).map_err(|_| EdhocError::BufferTooSmall)?));
+    Ok(offset)
+}
+
+fn skip_cbor_value(data: &[u8]) -> Result<usize, EdhocError> {
+    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    let first = data[0];
+    if (0x00..=0x17).contains(&first) { return Ok(1); }
+    if first == 0x18 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
+    if first == 0x19 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
+    if (0x20..=0x37).contains(&first) { return Ok(1); }
+    if first == 0x38 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
+    if first == 0x39 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
+    if (0x40..=0x57).contains(&first) {
+        let len = (first - 0x40) as usize;
+        if data.len() < 1 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok(1 + len);
+    }
+    if first == 0x58 {
+        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        let len = data[1] as usize;
+        if data.len() < 2 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok(2 + len);
+    }
+    if (0x60..=0x77).contains(&first) {
+        let len = (first - 0x60) as usize;
+        if data.len() < 1 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok(1 + len);
+    }
+    if first == 0x78 {
+        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        let len = data[1] as usize;
+        if data.len() < 2 + len { return Err(EdhocError::InvalidMessage); }
+        return Ok(2 + len);
+    }
+    if (0x80..=0x97).contains(&first) {
+        let count = (first - 0x80) as usize;
+        let mut offset = 1;
+        for _ in 0..count { offset += skip_cbor_value(&data[offset..])?; }
+        return Ok(offset);
+    }
+    if first == 0x98 {
+        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        let count = data[1] as usize;
+        let mut offset = 2;
+        for _ in 0..count { offset += skip_cbor_value(&data[offset..])?; }
+        return Ok(offset);
+    }
+    Err(EdhocError::InvalidMessage)
 }
 
 /// Copy an ID_CRED kid value into a bounded vec.
@@ -242,12 +504,22 @@ pub(crate) fn validate_deterministic_item(data: &[u8]) -> Result<(), EdhocError>
         }
         Ok(())
     } else {
-        Ok(())
+        // Reject non-container types (credentials must be maps or arrays)
+        // and indefinite-length encodings (RFC 8949 Section 4.2.3)
+        Err(EdhocError::InvalidMessage)
     }
 }
 
 /// Validate a peer credential against its embedded public key.
 pub(crate) fn validate_peer_credential(peer: PeerCredential<'_>) -> Result<(), EdhocError> {
+    // SECURITY: Always validate the public key regardless of credential type
+    if peer.public_key.len() != 32 {
+        return Err(EdhocError::InvalidMessage);
+    }
+    let mut pubkey = [0u8; 32];
+    pubkey.copy_from_slice(peer.public_key);
+    validate_pubkey(&pubkey)?;
+
     // Check the credential contains the expected public key.
     // For raw CCS: the x-value must match peer.public_key.
     let data = peer.credential;

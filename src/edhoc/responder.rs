@@ -25,7 +25,7 @@ use ccm::{
 };
 use rand_core::{CryptoRng, RngCore};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, Zeroizing};
 
 /// AES-CCM for Suite 0.
 type AesCcm = Ccm<Aes128, U8, U13>;
@@ -98,6 +98,7 @@ impl Zeroize for ResponderState {
         self.th_3.zeroize();
         self.th_4.zeroize();
         self.msg1.zeroize();
+        self.completed = false;
     }
 }
 
@@ -119,7 +120,11 @@ impl core::fmt::Debug for ResponderState {
     }
 }
 
-impl ZeroizeOnDrop for ResponderState {}
+impl Drop for ResponderState {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
 
 impl core::fmt::Debug for EdhocResponder {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -136,11 +141,16 @@ impl core::fmt::Debug for EdhocResponder {
 
 impl Zeroize for EdhocResponder {
     fn zeroize(&mut self) {
-        let (zero_priv, zero_pub) = SigningKey::from_seed(&[0; KEY_LEN_32]); self.privkey = zero_priv;
-        self.pubkey = zero_pub;
+        self.privkey.zeroize();
         self.eph_secret.zeroize();
         self.state.zeroize();
         self.state.lifecycle = Lifecycle::Zeroized;
+    }
+}
+
+impl Drop for EdhocResponder {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -200,8 +210,7 @@ impl EdhocResponder {
     }
 
     pub(crate) fn poison(&mut self) {
-        let (zero_priv, zero_pub) = SigningKey::from_seed(&[0; KEY_LEN_32]); self.privkey = zero_priv;
-        self.pubkey = zero_pub;
+        self.privkey.zeroize();
         self.eph_secret.zeroize();
         self.state.zeroize();
         self.state.lifecycle = Lifecycle::Failed;
@@ -250,19 +259,23 @@ impl EdhocResponder {
         };
         self.state.g_x = g_x;
 
-        // Parse C_I
+        // Parse C_I and reject trailing bytes (EAD_1 not supported)
         let rest = &msg1[g_x_start + 2 + 32..];
-        let c_i = if !rest.is_empty() {
+        let (c_i, c_i_len) = if !rest.is_empty() {
             if rest[0] <= 23 {
-                rest[0]
+                (rest[0], 1)
             } else if rest[0] == 0x41 && rest.len() > 1 {
-                rest[1]
+                (rest[1], 2)
             } else {
                 return Err(EdhocError::InvalidMessage);
             }
         } else {
             return Err(EdhocError::InvalidMessage);
         };
+        // Reject EAD_1: any trailing bytes after C_I are unsupported
+        if rest.len() > c_i_len {
+            return Err(EdhocError::InvalidMessage);
+        }
         if self.c_r.as_bytes() == [c_i] {
             self.poison();
             return Err(EdhocError::InvalidMessage);
@@ -450,9 +463,11 @@ impl EdhocResponder {
         if self.state.lifecycle != Lifecycle::PendingMessage3
             || pending.transcript_binding != self.state.th_3
         {
+            self.poison();
             return Err(EdhocError::InvalidState);
         }
         if peer.id_cred != pending.id_cred.as_bytes() {
+            self.poison();
             return Err(EdhocError::SignatureVerification);
         }
 
