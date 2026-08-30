@@ -51,6 +51,8 @@ pub enum OscoreError {
     KeyDerivation,
     /// Sender sequence exhausted, key rotation required.
     SeqExhausted,
+    /// Entropy source (RNG) failure.
+    EntropyFailure,
 }
 
 impl From<BufferTooSmall> for OscoreError {
@@ -70,6 +72,7 @@ impl core::fmt::Display for OscoreError {
             Self::BufferTooSmall(e) => write!(f, "OSCORE {}", e),
             Self::KeyDerivation => write!(f, "key derivation failed"),
             Self::SeqExhausted => write!(f, "sender sequence exhausted, key rotation required"),
+            Self::EntropyFailure => write!(f, "entropy source failure"),
         }
     }
 }

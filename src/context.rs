@@ -360,6 +360,14 @@ impl Context {
         &self.recipient_id[..self.recipient_id_len as usize]
     }
 
+    /// Return the master secret (for provisioning key derivation).
+    ///
+    /// # Security
+    /// This should only be used for deriving domain-separated keys (e.g., provisioning).
+    pub fn master_secret(&self) -> &[u8; KEY_LEN] {
+        &self.master_secret
+    }
+
     // Replay window methods
 
     pub(crate) fn is_response_reuse(&self, seq: OscoreSeqNum) -> bool {

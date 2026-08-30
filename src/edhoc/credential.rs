@@ -126,7 +126,13 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
         encoded.push_err(first)?;
         let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
         kid_val.push_err(first)?;
-        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 1));
+        return Ok((
+            IdCred {
+                encoded,
+                reference: IdCredReference::Kid(kid_val),
+            },
+            1,
+        ));
     }
 
     // Handle bare negative integer (0x20-0x37) - compact kid encoding
@@ -138,12 +144,20 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
         encoded.push_err(first)?;
         let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
         kid_val.push_err(first)?;
-        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 1));
+        return Ok((
+            IdCred {
+                encoded,
+                reference: IdCredReference::Kid(kid_val),
+            },
+            1,
+        ));
     }
 
     // Handle 2-byte unsigned integer (0x18 xx) - compact kid encoding
     if first == 0x18 {
-        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
         encoded.push_err(0xa1)?;
         encoded.push_err(0x04)?;
@@ -151,12 +165,20 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
         encoded.extend_err(&data[..2])?;
         let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
         kid_val.extend_err(&data[..2])?;
-        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 2));
+        return Ok((
+            IdCred {
+                encoded,
+                reference: IdCredReference::Kid(kid_val),
+            },
+            2,
+        ));
     }
 
     // Handle 2-byte negative integer (0x38 xx) - compact kid encoding
     if first == 0x38 {
-        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let mut encoded = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
         encoded.push_err(0xa1)?;
         encoded.push_err(0x04)?;
@@ -164,7 +186,13 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
         encoded.extend_err(&data[..2])?;
         let mut kid_val = heapless::Vec::<u8, ID_CRED_MAX_LEN>::new();
         kid_val.extend_err(&data[..2])?;
-        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, 2));
+        return Ok((
+            IdCred {
+                encoded,
+                reference: IdCredReference::Kid(kid_val),
+            },
+            2,
+        ));
     }
 
     // Handle bare byte string (0x40-0x57, 0x58) - compact kid encoding
@@ -174,8 +202,15 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
         encoded.push_err(0xa1)?;
         encoded.push_err(0x04)?;
         encode_bstr(&mut encoded, bstr_val)?;
-        let kid_val = heapless::Vec::from_slice(bstr_val).map_err(|_| EdhocError::BufferTooSmall)?;
-        return Ok((IdCred { encoded, reference: IdCredReference::Kid(kid_val) }, consumed));
+        let kid_val =
+            heapless::Vec::from_slice(bstr_val).map_err(|_| EdhocError::BufferTooSmall)?;
+        return Ok((
+            IdCred {
+                encoded,
+                reference: IdCredReference::Kid(kid_val),
+            },
+            consumed,
+        ));
     }
 
     // Handle maps (0xa1-0xa8)
@@ -190,29 +225,42 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
     let mut x5t_value: Option<(i128, heapless::Vec<u8, ID_CRED_MAX_LEN>)> = None;
 
     for _ in 0..num_pairs {
-        if offset >= data.len() { return Err(EdhocError::InvalidMessage); }
+        if offset >= data.len() {
+            return Err(EdhocError::InvalidMessage);
+        }
 
         let label_result = try_parse_cbor_int(&data[offset..]);
         let val_consumed = match label_result {
             Some((label, label_len)) => {
                 offset += label_len;
-                if seen_labels.contains(&label) { return Err(EdhocError::InvalidMessage); }
-                seen_labels.push(label).map_err(|_| EdhocError::BufferTooSmall)?;
+                if seen_labels.contains(&label) {
+                    return Err(EdhocError::InvalidMessage);
+                }
+                seen_labels
+                    .push(label)
+                    .map_err(|_| EdhocError::BufferTooSmall)?;
 
                 match label {
                     1 => skip_int_value(&data[offset..])?,
                     2 => validate_alg_value(&data[offset..])?,
                     4 => {
-                        if kid_value.is_some() { return Err(EdhocError::InvalidMessage); }
+                        if kid_value.is_some() {
+                            return Err(EdhocError::InvalidMessage);
+                        }
                         let (bstr_val, consumed) = parse_canonical_bstr(&data[offset..])?;
-                        kid_value = Some(heapless::Vec::from_slice(bstr_val).map_err(|_| EdhocError::BufferTooSmall)?);
+                        kid_value = Some(
+                            heapless::Vec::from_slice(bstr_val)
+                                .map_err(|_| EdhocError::BufferTooSmall)?,
+                        );
                         consumed
                     }
                     34 => {
-                        if x5t_value.is_some() { return Err(EdhocError::InvalidMessage); }
+                        if x5t_value.is_some() {
+                            return Err(EdhocError::InvalidMessage);
+                        }
                         parse_x5t_value(&data[offset..], &mut x5t_value)?
                     }
-                    _ => skip_cbor_value(&data[offset..])?
+                    _ => skip_cbor_value(&data[offset..])?,
                 }
             }
             None => {
@@ -226,7 +274,10 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
 
     let reference = match (kid_value, x5t_value) {
         (Some(kid), None) => IdCredReference::Kid(kid),
-        (None, Some((alg, hash))) => IdCredReference::X5t { algorithm: alg, hash },
+        (None, Some((alg, hash))) => IdCredReference::X5t {
+            algorithm: alg,
+            hash,
+        },
         _ => return Err(EdhocError::InvalidMessage),
     };
 
@@ -236,69 +287,127 @@ pub(crate) fn parse_id_cred(data: &[u8]) -> Result<(IdCred, usize), EdhocError> 
 }
 
 fn try_parse_cbor_int(data: &[u8]) -> Option<(i128, usize)> {
-    if data.is_empty() { return None; }
+    if data.is_empty() {
+        return None;
+    }
     let first = data[0];
-    if (0x00..=0x17).contains(&first) { return Some((first as i128, 1)); }
+    if (0x00..=0x17).contains(&first) {
+        return Some((first as i128, 1));
+    }
     if first == 0x18 {
-        if data.len() < 2 || data[1] < 24 { return None; }
+        if data.len() < 2 || data[1] < 24 {
+            return None;
+        }
         return Some((data[1] as i128, 2));
     }
     if first == 0x19 {
-        if data.len() < 3 { return None; }
+        if data.len() < 3 {
+            return None;
+        }
         let val = u16::from_be_bytes([data[1], data[2]]);
-        if val <= 0xff { return None; }
+        if val <= 0xff {
+            return None;
+        }
         return Some((val as i128, 3));
     }
     if (0x20..=0x37).contains(&first) {
         return Some((-((first - 0x20) as i128 + 1), 1));
     }
     if first == 0x38 {
-        if data.len() < 2 || data[1] < 24 { return None; }
+        if data.len() < 2 || data[1] < 24 {
+            return None;
+        }
         return Some((-(data[1] as i128 + 1), 2));
     }
     if first == 0x39 {
-        if data.len() < 3 { return None; }
+        if data.len() < 3 {
+            return None;
+        }
         let val = u16::from_be_bytes([data[1], data[2]]);
-        if val <= 0xff { return None; }
+        if val <= 0xff {
+            return None;
+        }
         return Some((-(val as i128 + 1), 3));
     }
     None
 }
 
 fn parse_canonical_bstr(data: &[u8]) -> Result<(&[u8], usize), EdhocError> {
-    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    if data.is_empty() {
+        return Err(EdhocError::InvalidMessage);
+    }
     let first = data[0];
     if (0x40..=0x57).contains(&first) {
         let len = (first - 0x40) as usize;
-        if data.len() < 1 + len { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 1 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok((&data[1..1 + len], 1 + len));
     }
     if first == 0x58 {
-        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let len = data[1] as usize;
-        if len < 24 { return Err(EdhocError::InvalidMessage); }
-        if data.len() < 2 + len { return Err(EdhocError::InvalidMessage); }
+        if len < 24 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        if data.len() < 2 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok((&data[2..2 + len], 2 + len));
     }
     if first == 0x59 {
-        if data.len() < 3 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 3 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-        if len <= 0xff { return Err(EdhocError::InvalidMessage); }
-        if data.len() < 3 + len { return Err(EdhocError::InvalidMessage); }
+        if len <= 0xff {
+            return Err(EdhocError::InvalidMessage);
+        }
+        if data.len() < 3 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok((&data[3..3 + len], 3 + len));
     }
     Err(EdhocError::InvalidMessage)
 }
 
 fn skip_int_value(data: &[u8]) -> Result<usize, EdhocError> {
-    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    if data.is_empty() {
+        return Err(EdhocError::InvalidMessage);
+    }
     let first = data[0];
-    if (0x00..=0x17).contains(&first) { return Ok(1); }
-    if first == 0x18 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
-    if first == 0x19 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
-    if (0x20..=0x37).contains(&first) { return Ok(1); }
-    if first == 0x38 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
-    if first == 0x39 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
+    if (0x00..=0x17).contains(&first) {
+        return Ok(1);
+    }
+    if first == 0x18 {
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(2);
+    }
+    if first == 0x19 {
+        if data.len() < 3 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(3);
+    }
+    if (0x20..=0x37).contains(&first) {
+        return Ok(1);
+    }
+    if first == 0x38 {
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(2);
+    }
+    if first == 0x39 {
+        if data.len() < 3 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(3);
+    }
     Err(EdhocError::InvalidMessage)
 }
 
@@ -307,23 +416,35 @@ fn skip_int_value(data: &[u8]) -> Result<usize, EdhocError> {
 /// - 34=x5t label (creates ambiguity with x5t header)
 /// - Duplicate values in the array
 fn validate_alg_value(data: &[u8]) -> Result<usize, EdhocError> {
-    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    if data.is_empty() {
+        return Err(EdhocError::InvalidMessage);
+    }
     let first = data[0];
     // Integer values are always OK
-    if let Ok(len) = skip_int_value(data) { return Ok(len); }
+    if let Ok(len) = skip_int_value(data) {
+        return Ok(len);
+    }
     // Arrays need inspection for ambiguous values
     if (0x80..=0x97).contains(&first) {
         let count = (first - 0x80) as usize;
         let mut offset = 1;
         let mut seen_values: heapless::Vec<i128, 8> = heapless::Vec::new();
         for _ in 0..count {
-            if offset >= data.len() { return Err(EdhocError::InvalidMessage); }
+            if offset >= data.len() {
+                return Err(EdhocError::InvalidMessage);
+            }
             if let Some((val, len)) = try_parse_cbor_int(&data[offset..]) {
                 // Reject 1 (kty) and 34 (x5t) as they create ambiguity
-                if val == 1 || val == 34 { return Err(EdhocError::InvalidMessage); }
+                if val == 1 || val == 34 {
+                    return Err(EdhocError::InvalidMessage);
+                }
                 // Reject duplicate values
-                if seen_values.contains(&val) { return Err(EdhocError::InvalidMessage); }
-                seen_values.push(val).map_err(|_| EdhocError::BufferTooSmall)?;
+                if seen_values.contains(&val) {
+                    return Err(EdhocError::InvalidMessage);
+                }
+                seen_values
+                    .push(val)
+                    .map_err(|_| EdhocError::BufferTooSmall)?;
                 offset += len;
             } else {
                 offset += skip_cbor_value(&data[offset..])?;
@@ -338,59 +459,111 @@ fn parse_cbor_int(data: &[u8]) -> Result<(i128, usize), EdhocError> {
     try_parse_cbor_int(data).ok_or(EdhocError::InvalidMessage)
 }
 
-fn parse_x5t_value(data: &[u8], out: &mut Option<(i128, heapless::Vec<u8, ID_CRED_MAX_LEN>)>) -> Result<usize, EdhocError> {
-    if data.is_empty() || data[0] != 0x82 { return Err(EdhocError::InvalidMessage); }
+fn parse_x5t_value(
+    data: &[u8],
+    out: &mut Option<(i128, heapless::Vec<u8, ID_CRED_MAX_LEN>)>,
+) -> Result<usize, EdhocError> {
+    if data.is_empty() || data[0] != 0x82 {
+        return Err(EdhocError::InvalidMessage);
+    }
     let mut offset = 1;
     let (alg, alg_len) = parse_cbor_int(&data[offset..])?;
     offset += alg_len;
     let (hash_val, hash_len) = parse_bstr(&data[offset..])?;
     offset += hash_len;
-    *out = Some((alg, heapless::Vec::from_slice(hash_val).map_err(|_| EdhocError::BufferTooSmall)?));
+    *out = Some((
+        alg,
+        heapless::Vec::from_slice(hash_val).map_err(|_| EdhocError::BufferTooSmall)?,
+    ));
     Ok(offset)
 }
 
 fn skip_cbor_value(data: &[u8]) -> Result<usize, EdhocError> {
-    if data.is_empty() { return Err(EdhocError::InvalidMessage); }
+    if data.is_empty() {
+        return Err(EdhocError::InvalidMessage);
+    }
     let first = data[0];
-    if (0x00..=0x17).contains(&first) { return Ok(1); }
-    if first == 0x18 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
-    if first == 0x19 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
-    if (0x20..=0x37).contains(&first) { return Ok(1); }
-    if first == 0x38 { if data.len() < 2 { return Err(EdhocError::InvalidMessage); } return Ok(2); }
-    if first == 0x39 { if data.len() < 3 { return Err(EdhocError::InvalidMessage); } return Ok(3); }
+    if (0x00..=0x17).contains(&first) {
+        return Ok(1);
+    }
+    if first == 0x18 {
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(2);
+    }
+    if first == 0x19 {
+        if data.len() < 3 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(3);
+    }
+    if (0x20..=0x37).contains(&first) {
+        return Ok(1);
+    }
+    if first == 0x38 {
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(2);
+    }
+    if first == 0x39 {
+        if data.len() < 3 {
+            return Err(EdhocError::InvalidMessage);
+        }
+        return Ok(3);
+    }
     if (0x40..=0x57).contains(&first) {
         let len = (first - 0x40) as usize;
-        if data.len() < 1 + len { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 1 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok(1 + len);
     }
     if first == 0x58 {
-        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let len = data[1] as usize;
-        if data.len() < 2 + len { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok(2 + len);
     }
     if (0x60..=0x77).contains(&first) {
         let len = (first - 0x60) as usize;
-        if data.len() < 1 + len { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 1 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok(1 + len);
     }
     if first == 0x78 {
-        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let len = data[1] as usize;
-        if data.len() < 2 + len { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 + len {
+            return Err(EdhocError::InvalidMessage);
+        }
         return Ok(2 + len);
     }
     if (0x80..=0x97).contains(&first) {
         let count = (first - 0x80) as usize;
         let mut offset = 1;
-        for _ in 0..count { offset += skip_cbor_value(&data[offset..])?; }
+        for _ in 0..count {
+            offset += skip_cbor_value(&data[offset..])?;
+        }
         return Ok(offset);
     }
     if first == 0x98 {
-        if data.len() < 2 { return Err(EdhocError::InvalidMessage); }
+        if data.len() < 2 {
+            return Err(EdhocError::InvalidMessage);
+        }
         let count = data[1] as usize;
         let mut offset = 2;
-        for _ in 0..count { offset += skip_cbor_value(&data[offset..])?; }
+        for _ in 0..count {
+            offset += skip_cbor_value(&data[offset..])?;
+        }
         return Ok(offset);
     }
     Err(EdhocError::InvalidMessage)
@@ -457,10 +630,10 @@ pub(crate) fn validate_deterministic_item(data: &[u8]) -> Result<(), EdhocError>
                 return Err(EdhocError::InvalidMessage);
             }
             let key = &data[key_start..offset];
-            if let Some(prev) = prev_key {
-                if key <= prev {
-                    return Err(EdhocError::InvalidMessage);
-                }
+            if let Some(prev) = prev_key
+                && key <= prev
+            {
+                return Err(EdhocError::InvalidMessage);
             }
             prev_key = Some(key);
 

@@ -130,6 +130,8 @@ pub enum OscoreError {
     KeyDerivation,
     /// Sender sequence exhausted, key rotation required.
     SeqExhausted,
+    /// Entropy source (RNG) failure.
+    EntropyFailure,
 }
 
 impl From<BufferTooSmall> for OscoreError {
@@ -149,6 +151,7 @@ impl core::fmt::Display for OscoreError {
             Self::BufferTooSmall(e) => write!(f, "OSCORE {}", e),
             Self::KeyDerivation => write!(f, "key derivation failed"),
             Self::SeqExhausted => write!(f, "sender sequence exhausted, key rotation required"),
+            Self::EntropyFailure => write!(f, "entropy source failure"),
         }
     }
 }
@@ -240,6 +243,7 @@ pub struct PendingResponse<'a> {
     context: &'a mut Context,
     request_seq: OscoreSeqNum,
     response_seq: Option<OscoreSeqNum>,
+    mark_request_used: bool,
     code: u8,
     options: heapless::Vec<u8, 128>,
     payload: heapless::Vec<u8, 128>,
@@ -254,9 +258,11 @@ impl PendingResponse<'_> {
             return Err(OscoreError::InvalidParam);
         }
         if let Some(seq) = self.response_seq {
-            self.context.update_replay_window(seq);
+            self.context.mark_received_response_piv(seq);
         }
-        self.context.mark_received_response(self.request_seq);
+        if self.mark_request_used {
+            self.context.mark_received_response(self.request_seq);
+        }
         Ok((self.code, self.options, self.payload))
     }
 }
@@ -319,6 +325,9 @@ pub struct Context {
     received_response_seq: OscoreSeqNum,
     received_response_window: u32,
     received_response_window_initialized: bool,
+    received_response_piv_seq: OscoreSeqNum,
+    received_response_piv_window: u32,
+    received_response_piv_window_initialized: bool,
     allow_no_piv_response: bool,
     context_id: ContextId,
 }
@@ -420,10 +429,10 @@ impl Context {
         if salt.len() > SALT_MAX_LEN {
             return Err(OscoreError::InvalidParam);
         }
-        if let Some(ic) = id_context {
-            if ic.len() > ID_CONTEXT_CAPACITY {
-                return Err(OscoreError::InvalidParam);
-            }
+        if let Some(ic) = id_context
+            && ic.len() > ID_CONTEXT_CAPACITY
+        {
+            return Err(OscoreError::InvalidParam);
         }
 
         let id_context_value = id_context.unwrap_or(&[]);
@@ -459,6 +468,9 @@ impl Context {
             received_response_seq: OscoreSeqNum::default(),
             received_response_window: 0,
             received_response_window_initialized: false,
+            received_response_piv_seq: OscoreSeqNum::default(),
+            received_response_piv_window: 0,
+            received_response_piv_window_initialized: false,
             allow_no_piv_response,
             context_id,
         };
@@ -766,6 +778,23 @@ impl Context {
     /// Get recipient ID.
     pub fn recipient_id(&self) -> &[u8] {
         &self.recipient_id[..self.recipient_id_len as usize]
+    }
+
+    /// Return the master secret (for provisioning key derivation).
+    ///
+    /// # Security
+    /// This should only be used for deriving domain-separated keys (e.g., provisioning).
+    pub fn master_secret(&self) -> &[u8; KEY_LEN] {
+        &self.master_secret
+    }
+
+    /// Return the EDHOC/OSCORE master salt used to derive this context.
+    ///
+    /// # Security
+    /// Expose this only to provisioning and conformance code that already has
+    /// authority to handle the corresponding master secret.
+    pub fn master_salt(&self) -> &[u8] {
+        &self.master_salt[..self.master_salt_len as usize]
     }
 
     /// Protect (encrypt) a CoAP request.
@@ -1210,6 +1239,38 @@ impl Context {
         ciphertext: &[u8],
         request_piv: &[u8],
     ) -> Result<PendingResponse<'_>, OscoreError> {
+        self.begin_unprotect_response_mode(oscore_option, ciphertext, request_piv, false)
+    }
+
+    /// Authenticate an Observe notification bound to an original OSCORE request.
+    ///
+    /// RFC 8613 responses reuse the original request KID and PIV in their AAD. RFC 7641
+    /// permits many notifications for one request, so this API deliberately does not consume
+    /// the request PIV. Every notification MUST instead carry a fresh responder PIV; that PIV
+    /// is checked in a dedicated replay window and is accepted only by
+    /// [`PendingResponse::commit`]. Dropping the pending response (for example, when transport
+    /// delivery or acknowledgement fails) leaves both replay windows unchanged.
+    ///
+    /// The caller remains responsible for binding the CoAP token to the stored request KID/PIV
+    /// and for removing that association on cancellation or RST. An exact retransmission that
+    /// was already committed is rejected as a replay; transports should recognize and ACK their
+    /// cached ciphertext without decrypting it again.
+    pub fn begin_unprotect_observe_response(
+        &mut self,
+        oscore_option: &[u8],
+        ciphertext: &[u8],
+        request_piv: &[u8],
+    ) -> Result<PendingResponse<'_>, OscoreError> {
+        self.begin_unprotect_response_mode(oscore_option, ciphertext, request_piv, true)
+    }
+
+    fn begin_unprotect_response_mode(
+        &mut self,
+        oscore_option: &[u8],
+        ciphertext: &[u8],
+        request_piv: &[u8],
+        observe: bool,
+    ) -> Result<PendingResponse<'_>, OscoreError> {
         if ciphertext.len() < TAG_LEN + 1 {
             return Err(OscoreError::InvalidParam);
         }
@@ -1228,8 +1289,14 @@ impl Context {
         }
 
         let request_seq = OscoreSeqNum::from_piv(request_piv).ok_or(OscoreError::InvalidParam)?;
-        if self.is_received_response_reuse(request_seq) {
+        if !observe && self.is_received_response_reuse(request_seq) {
             return Err(OscoreError::Replay);
+        }
+
+        // A response without a PIV derives its nonce from the request. That construction is
+        // safe only once and therefore cannot represent a stream of Observe notifications.
+        if observe && opt.piv_len == 0 {
+            return Err(OscoreError::InvalidParam);
         }
 
         let piv = if opt.piv_len > 0 {
@@ -1240,9 +1307,9 @@ impl Context {
 
         let response_seq = if opt.piv_len > 0 {
             let seq = OscoreSeqNum::from_piv(piv).ok_or(OscoreError::InvalidParam)?;
-            // SECURITY: Responses with explicit PIV use their own replay window, not the
-            // request replay window. is_response_reuse tracks response-specific PIVs.
-            if self.is_response_reuse(seq) {
+            // Explicit response PIVs have their own receive window. Do not mix it with the
+            // request receive window or with the responder's no-PIV nonce-reuse window.
+            if self.is_received_response_piv_reuse(seq) {
                 return Err(OscoreError::Replay);
             }
             Some(seq)
@@ -1313,6 +1380,7 @@ impl Context {
             context: self,
             request_seq,
             response_seq,
+            mark_request_used: !observe,
             code,
             options,
             payload,
@@ -1327,6 +1395,20 @@ impl Context {
         request_piv: &[u8],
     ) -> Result<(u8, heapless::Vec<u8, 128>, heapless::Vec<u8, 128>), OscoreError> {
         self.begin_unprotect_response(oscore_option, ciphertext, request_piv)?
+            .commit()
+    }
+
+    /// Unprotect and immediately accept an OSCORE Observe notification.
+    ///
+    /// Use [`Context::begin_unprotect_observe_response`] when transport acknowledgement must
+    /// succeed before the responder PIV is committed.
+    pub fn unprotect_observe_response(
+        &mut self,
+        oscore_option: &[u8],
+        ciphertext: &[u8],
+        request_piv: &[u8],
+    ) -> Result<(u8, heapless::Vec<u8, 128>, heapless::Vec<u8, 128>), OscoreError> {
+        self.begin_unprotect_observe_response(oscore_option, ciphertext, request_piv)?
             .commit()
     }
 
@@ -1385,6 +1467,37 @@ impl Context {
         } else {
             let diff = self.received_response_seq.get() - seq.get();
             self.received_response_window |= 1 << diff as u32;
+        }
+    }
+
+    fn is_received_response_piv_reuse(&self, seq: OscoreSeqNum) -> bool {
+        if !self.received_response_piv_window_initialized
+            || seq.get() > self.received_response_piv_seq.get()
+        {
+            return false;
+        }
+
+        let diff = self.received_response_piv_seq.get() - seq.get();
+        diff >= u64::from(WINDOW_SIZE)
+            || self.received_response_piv_window & (1 << diff as u32) != 0
+    }
+
+    fn mark_received_response_piv(&mut self, seq: OscoreSeqNum) {
+        if !self.received_response_piv_window_initialized {
+            self.received_response_piv_seq = seq;
+            self.received_response_piv_window = 1;
+            self.received_response_piv_window_initialized = true;
+        } else if seq.get() > self.received_response_piv_seq.get() {
+            let shift = seq.get() - self.received_response_piv_seq.get();
+            self.received_response_piv_window = if shift >= u64::from(WINDOW_SIZE) {
+                1
+            } else {
+                (self.received_response_piv_window << shift as u32) | 1
+            };
+            self.received_response_piv_seq = seq;
+        } else {
+            let diff = self.received_response_piv_seq.get() - seq.get();
+            self.received_response_piv_window |= 1 << diff as u32;
         }
     }
 
@@ -3240,6 +3353,164 @@ mod tests {
                 .unprotect_response(&response.1, &response.0, request_piv)
                 .unwrap_err(),
             OscoreError::Replay
+        );
+    }
+
+    #[test]
+    fn observe_accepts_multiple_fresh_responder_pivs_for_one_request() {
+        let master_secret = hex!("0102030405060708090a0b0c0d0e0f10");
+        let mut alice = Context::new_ephemeral(&master_secret, None, &[0], &[1]).unwrap();
+        let mut bob = Context::new_ephemeral(&master_secret, None, &[1], &[0]).unwrap();
+        let (_, request_option) = alice.protect_request(0x01, &[], b"observe").unwrap();
+        let request_piv = &request_option[1..2];
+        let first = bob
+            .protect_response_with_piv(0x45, &[], b"first", &[0], request_piv)
+            .unwrap();
+        let second = bob
+            .protect_response_with_piv(0x45, &[], b"second", &[0], request_piv)
+            .unwrap();
+
+        assert_eq!(
+            alice
+                .unprotect_observe_response(&first.1, &first.0, request_piv)
+                .unwrap()
+                .2,
+            b"first"
+        );
+        assert_eq!(
+            alice
+                .unprotect_observe_response(&second.1, &second.0, request_piv)
+                .unwrap()
+                .2,
+            b"second"
+        );
+
+        // A normal response remains one-shot even when each response has a fresh PIV.
+        let mut ordinary = Context::new_ephemeral(&master_secret, None, &[0], &[1]).unwrap();
+        ordinary
+            .unprotect_response(&first.1, &first.0, request_piv)
+            .unwrap();
+        assert_eq!(
+            ordinary
+                .unprotect_response(&second.1, &second.0, request_piv)
+                .unwrap_err(),
+            OscoreError::Replay
+        );
+    }
+
+    #[test]
+    fn observe_replay_window_accepts_out_of_order_once_and_rejects_old() {
+        let master_secret = hex!("0102030405060708090a0b0c0d0e0f10");
+        let mut alice = Context::new_ephemeral(&master_secret, None, &[0], &[1]).unwrap();
+        let mut request_sender = Context::new_ephemeral(&master_secret, None, &[0], &[1]).unwrap();
+        let (_, request_option) = request_sender
+            .protect_request(0x01, &[], b"observe")
+            .unwrap();
+        let request_piv = &request_option[1..2];
+
+        let make_response = |sequence: u64, payload: &'static [u8]| {
+            let mut responder = Context::new_ephemeral(&master_secret, None, &[1], &[0]).unwrap();
+            responder.sender_seq = seq(sequence);
+            responder
+                .protect_response_with_piv(0x45, &[], payload, &[0], request_piv)
+                .unwrap()
+        };
+        let ten = make_response(10, b"ten");
+        let twelve = make_response(12, b"twelve");
+        let eleven = make_response(11, b"eleven");
+        let forty_four = make_response(44, b"forty-four");
+
+        for response in [&ten, &twelve, &eleven] {
+            alice
+                .unprotect_observe_response(&response.1, &response.0, request_piv)
+                .unwrap();
+        }
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&eleven.1, &eleven.0, request_piv),
+            Err(OscoreError::Replay)
+        ));
+        alice
+            .unprotect_observe_response(&forty_four.1, &forty_four.0, request_piv)
+            .unwrap();
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&twelve.1, &twelve.0, request_piv),
+            Err(OscoreError::Replay)
+        ));
+    }
+
+    #[test]
+    fn observe_failure_and_dropped_pending_do_not_advance_replay_state() {
+        let master_secret = hex!("0102030405060708090a0b0c0d0e0f10");
+        let mut alice = Context::new_ephemeral(&master_secret, None, &[0], &[1]).unwrap();
+        let mut bob = Context::new_ephemeral(&master_secret, None, &[1], &[0]).unwrap();
+        let (_, request_option) = alice.protect_request(0x01, &[], b"observe").unwrap();
+        let request_piv = &request_option[1..2];
+        let response = bob
+            .protect_response_with_piv(0x45, &[], b"notification", &[0], request_piv)
+            .unwrap();
+
+        let mut corrupt = response.0.clone();
+        corrupt[0] ^= 1;
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&response.1, &corrupt, request_piv),
+            Err(OscoreError::DecryptFailed)
+        ));
+        let mut wrong_kid = response.1.clone();
+        wrong_kid[0] |= 0x08;
+        wrong_kid.push(2).unwrap();
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&wrong_kid, &response.0, request_piv),
+            Err(OscoreError::NoContext)
+        ));
+
+        drop(
+            alice
+                .begin_unprotect_observe_response(&response.1, &response.0, request_piv)
+                .unwrap(),
+        );
+        alice
+            .unprotect_observe_response(&response.1, &response.0, request_piv)
+            .unwrap();
+        // Once committed, an exact encrypted retransmission is recognized as replay. The CoAP
+        // transport handles such a retransmission from its cached bytes without decrypting it.
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&response.1, &response.0, request_piv),
+            Err(OscoreError::Replay)
+        ));
+    }
+
+    #[test]
+    fn observe_requires_explicit_piv_and_accepts_terminal_40_bit_piv_once() {
+        let master_secret = hex!("0102030405060708090a0b0c0d0e0f10");
+        let mut alice = Context::new_ephemeral(&master_secret, None, &[0], &[1]).unwrap();
+        let mut bob = Context::new_ephemeral(&master_secret, None, &[1], &[0]).unwrap();
+        let (_, request_option) = alice.protect_request(0x01, &[], b"observe").unwrap();
+        let request_piv = &request_option[1..2];
+
+        let no_piv = bob
+            .protect_response(0x45, &[], b"one-shot", &[0], request_piv, false)
+            .unwrap();
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&no_piv.1, &no_piv.0, request_piv),
+            Err(OscoreError::InvalidParam)
+        ));
+
+        bob.sender_seq = seq(OscoreSeqNum::MAX);
+        let terminal = bob
+            .protect_response_with_piv(0x45, &[], b"terminal", &[0], request_piv)
+            .unwrap();
+        assert_eq!(terminal.1.as_slice(), b"\x05\xff\xff\xff\xff\xff");
+        alice
+            .unprotect_observe_response(&terminal.1, &terminal.0, request_piv)
+            .unwrap();
+        assert!(matches!(
+            alice.begin_unprotect_observe_response(&terminal.1, &terminal.0, request_piv),
+            Err(OscoreError::Replay)
+        ));
+        assert_eq!(
+            bob.protect_response_with_piv(0x45, &[], b"exhausted", &[0], request_piv)
+                .unwrap_err(),
+            OscoreError::SeqExhausted
         );
     }
 

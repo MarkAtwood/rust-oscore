@@ -141,27 +141,21 @@ pub(crate) fn parse_identifier(data: &[u8]) -> Result<(ConnectionId, usize), Edh
     }
 }
 
-/// Encode a connection identifier per RFC 9528 compact encoding.
+/// Encode a connection identifier per RFC 9528 Section 3.3.2.
 ///
-/// Matches Python `_encode_connection_id`: single-byte values 0-23 are
-/// encoded as CBOR unsigned integers, 232-255 as negative integers,
-/// and everything else as a CBOR byte string.
+/// A byte string that coincides with a one-byte CBOR encoding of an integer
+/// (single byte 0x00-0x17 -> uint 0..23, 0x20-0x37 -> negative -24..-1) is
+/// copied directly into the message; other byte strings (including the empty
+/// byte string, h'' -> 0x40) are encoded as CBOR byte strings. E.g.
+/// 0x21 -> 0x21, 0x0D -> 0x0D, 0x18 -> 0x4118, 0x38 -> 0x4138.
 pub(crate) fn encode_identifier<const N: usize>(
     buf: &mut heapless::Vec<u8, N>,
     id: &ConnectionId,
 ) -> Result<(), EdhocError> {
     let bytes = id.as_bytes();
-    if bytes.len() == 1 {
-        let val = bytes[0];
-        if val <= 23 {
-            buf.push_err(val)?;
-            return Ok(());
-        }
-        if val >= 232 {
-            let abs_n = 256 - val as u16;
-            buf.push_err(0x20u8 + (abs_n as u8 - 1))?;
-            return Ok(());
-        }
+    if bytes.len() == 1 && (bytes[0] <= 0x17 || (0x20..=0x37).contains(&bytes[0])) {
+        buf.push_err(bytes[0])?;
+        return Ok(());
     }
     encode_bstr(buf, bytes)
 }

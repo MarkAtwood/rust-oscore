@@ -4,7 +4,7 @@
 //! Core EDHOC types: connection identifiers, credential references, and buffer helpers.
 
 use super::{CONNECTION_ID_CAPACITY, EdhocError, ID_CRED_MAX_LEN};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// An EDHOC connection identifier in its raw byte-string form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,3 +114,12 @@ impl<const N: usize> Drop for SecretVec<N> {
         self.0.as_mut_slice().zeroize();
     }
 }
+
+impl<const N: usize> Zeroize for SecretVec<N> {
+    fn zeroize(&mut self) {
+        self.0.as_mut_slice().zeroize();
+    }
+}
+
+// The Drop impl above wipes the initialized buffer, matching the marker contract.
+impl<const N: usize> ZeroizeOnDrop for SecretVec<N> {}

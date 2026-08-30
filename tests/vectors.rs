@@ -144,7 +144,7 @@ fn hex_to_array<const N: usize>(hex: &str) -> [u8; N] {
     let len = bytes.len();
     bytes
         .try_into()
-        .expect(&format!("hex_to_array: expected {} bytes, got {}", N, len))
+        .unwrap_or_else(|_| panic!("hex_to_array: expected {N} bytes, got {len}"))
 }
 
 #[test]
@@ -379,5 +379,5 @@ fn test_edhoc_interop_vectors() {
     assert_eq!(v["name"], "fixed_seed_sign_sign");
     // Verifies Rust EdhocInitiator/Responder with fixed seeds produces identical PRK, OSCORE context, keys byte-for-byte to Python oracle.
     // Mismatches in KDF labels, TH computation, and exporter fixed; derivation now aligned in edhoc.rs.
-    assert!(v["oscore_master_secret"].as_str().unwrap().len() > 0);
+    assert!(!v["oscore_master_secret"].as_str().unwrap().is_empty());
 }

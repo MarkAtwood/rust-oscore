@@ -6,10 +6,10 @@
 //! Provides a unified interface over Ed25519 (RFC 9528 standard) and
 //! Schnorr48 (LICHEN variant) based on feature flags.
 
-#[cfg(feature = "edhoc-schnorr48")]
-use zeroize::{Zeroize, ZeroizeOnDrop};
 #[cfg(not(feature = "edhoc-schnorr48"))]
 use zeroize::Zeroize;
+#[cfg(feature = "edhoc-schnorr48")]
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Signature length in bytes.
 #[cfg(feature = "edhoc-schnorr48")]
@@ -33,7 +33,9 @@ pub struct SigningKey {
 #[cfg(not(feature = "edhoc-schnorr48"))]
 impl Clone for SigningKey {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone() }
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -67,10 +69,7 @@ impl SigningKey {
     pub fn from_seed(seed: &[u8; 32]) -> (Self, VerifyingKey) {
         let schnorr_seed = schnorr48::Seed::new(*seed);
         let (privkey, pubkey) = schnorr48::derive_keypair(&schnorr_seed);
-        (
-            Self { inner: privkey },
-            VerifyingKey { inner: pubkey },
-        )
+        (Self { inner: privkey }, VerifyingKey { inner: pubkey })
     }
 
     #[cfg(not(feature = "edhoc-schnorr48"))]
@@ -79,17 +78,19 @@ impl SigningKey {
         let verifying_key = signing_key.verifying_key();
         (
             Self { inner: signing_key },
-            VerifyingKey { inner: verifying_key },
+            VerifyingKey {
+                inner: verifying_key,
+            },
         )
     }
 
     /// Get raw key bytes (for testing zeroization).
-    #[cfg(feature = "edhoc-schnorr48")]
+    #[cfg(all(test, feature = "edhoc-schnorr48"))]
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.inner.as_bytes()
     }
 
-    #[cfg(not(feature = "edhoc-schnorr48"))]
+    #[cfg(all(test, not(feature = "edhoc-schnorr48")))]
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.inner.as_bytes()
     }

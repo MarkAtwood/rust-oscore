@@ -8,12 +8,15 @@ use super::credential::{
     PeerCredential, encode_credential, encode_id_cred, parse_id_cred, raw_key_credential,
     validate_peer_credential, validate_pubkey,
 };
-use super::kdf::{edhoc_kdf, export_context, hkdf_extract};
+use super::kdf::{
+    LABEL_IV_3, LABEL_K_3, LABEL_KEYSTREAM_2, LABEL_MAC_2, LABEL_MAC_3, edhoc_kdf, export_context,
+    hkdf_extract,
+};
+use super::sign::{SIG_LEN, SigningKey, VerifyingKey};
 use super::transcript::{
     build_context_2, build_context_3, build_signature_structure, transcript_2, transcript_3,
     transcript_4,
 };
-use super::sign::{SigningKey, VerifyingKey, SIG_LEN};
 use super::types::{ConnectionId, IdCred, SecretVec, VecExt};
 use super::{EdhocError, KEY_LEN_32, Lifecycle, SUITE_0};
 use crate::{Context, KEY_LEN, NONCE_LEN, OscoreError, TAG_LEN};
@@ -169,7 +172,6 @@ impl EdhocResponder {
     /// * `rng` - RNG implementing RngCore + CryptoRng for ephemeral key
     pub fn new<R: RngCore + CryptoRng>(seed: [u8; 32], c_r: u8, rng: &mut R) -> Self {
         let (privkey, pubkey) = SigningKey::from_seed(&seed);
-        
 
         let eph_secret = StaticSecret::random_from_rng(rng);
         let eph_public = PublicKey::from(&eph_secret);
@@ -191,11 +193,10 @@ impl EdhocResponder {
         rng: &mut R,
     ) -> Result<Self, OscoreError> {
         let (privkey, pubkey) = SigningKey::from_seed(&seed);
-        
 
         let mut eph_seed = [0u8; KEY_LEN_32];
         rng.try_fill_bytes(&mut eph_seed[..])
-            .map_err(|_| OscoreError::KeyDerivation)?;
+            .map_err(|_| OscoreError::EntropyFailure)?;
         let eph_secret = StaticSecret::from(eph_seed);
         let eph_public = PublicKey::from(&eph_secret);
 
@@ -297,7 +298,7 @@ impl EdhocResponder {
             if g_xy.as_bytes() == &[0; KEY_LEN_32] {
                 return Err(EdhocError::InvalidMessage);
             }
-            self.state.th_2 = transcript_2(self.eph_public.as_bytes(), &self.c_r, msg1)?;
+            self.state.th_2 = transcript_2(self.eph_public.as_bytes(), msg1)?;
 
             // PRK_2e = HKDF-Extract(salt=TH_2, IKM=G_XY)
             let prk_2e_z = hkdf_extract(&self.state.th_2, g_xy.as_bytes());
@@ -312,14 +313,10 @@ impl EdhocResponder {
             encode_id_cred(&mut id_cred_r, self.pubkey.as_bytes())?;
             let mut credential_r = heapless::Vec::<u8, 80>::new();
             encode_credential(&mut credential_r, self.pubkey.as_bytes())?;
-            let context_2 = build_context_2(&self.c_r, &id_cred_r, &credential_r)?;
-            let mac_2 = edhoc_kdf(
-                &self.state.prk_3e2m,
-                &self.state.th_2,
-                "MAC_2",
-                &context_2,
-                32,
-            )?;
+            let context_2 =
+                build_context_2(&self.c_r, &id_cred_r, &self.state.th_2, &credential_r)?;
+            // MAC_2 (label=2, context=context_2)
+            let mac_2 = edhoc_kdf(&self.state.prk_3e2m, LABEL_MAC_2, &context_2, 32)?;
             let m_2 =
                 build_signature_structure(&id_cred_r, &self.state.th_2, &credential_r, &mac_2)?;
             let signature_2 = self.privkey.sign(&self.pubkey, &m_2);
@@ -329,12 +326,11 @@ impl EdhocResponder {
             plaintext_2.extend_err(&id_cred_r)?;
             encode_bstr(&mut plaintext_2, &signature_2)?;
 
-            // Encrypt with KEYSTREAM_2
+            // Encrypt with KEYSTREAM_2 (label=0, context=TH_2)
             let keystream_2 = edhoc_kdf(
                 &self.state.prk_2e,
+                LABEL_KEYSTREAM_2,
                 &self.state.th_2,
-                "KEYSTREAM_2",
-                &[],
                 plaintext_2.len(),
             )?;
             let mut ciphertext_2 = heapless::Vec::<u8, 128>::new();
@@ -349,7 +345,6 @@ impl EdhocResponder {
             g_y_ciphertext.extend_err(self.eph_public.as_bytes())?;
             g_y_ciphertext.extend_err(&ciphertext_2)?;
             encode_bstr(&mut msg2, &g_y_ciphertext)?;
-            encode_identifier(&mut msg2, &self.c_r)?;
 
             self.state.lifecycle = Lifecycle::AwaitingMessage3;
             Ok(msg2)
@@ -396,13 +391,12 @@ impl EdhocResponder {
                 return Err(EdhocError::InvalidMessage);
             }
 
-            // K_3 and IV_3 for AEAD decryption
-            let k_3 = edhoc_kdf(&self.state.prk_3e2m, &self.state.th_3, "K_3", &[], KEY_LEN)?;
+            // K_3 (label=3, context=TH_3) and IV_3 (label=4, context=TH_3) for AEAD decryption
+            let k_3 = edhoc_kdf(&self.state.prk_3e2m, LABEL_K_3, &self.state.th_3, KEY_LEN)?;
             let iv_3 = edhoc_kdf(
                 &self.state.prk_3e2m,
+                LABEL_IV_3,
                 &self.state.th_3,
-                "IV_3",
-                &[],
                 NONCE_LEN,
             )?;
 
@@ -437,7 +431,7 @@ impl EdhocResponder {
                 return Err(EdhocError::InvalidMessage);
             }
 
-            let mut plaintext = heapless::Vec::new();
+            let mut plaintext = SecretVec::<128>::new();
             plaintext.extend_err(&plaintext_3)?;
             self.state.lifecycle = Lifecycle::PendingMessage3;
             Ok(PendingMessage3 {
@@ -478,7 +472,8 @@ impl EdhocResponder {
                 .try_into()
                 .map_err(|_| EdhocError::InvalidMessage)?;
             validate_pubkey(peer.public_key)?;
-            let peer_pubkey = VerifyingKey::from_bytes(peer.public_key).ok_or(EdhocError::SignatureVerification)?;
+            let peer_pubkey = VerifyingKey::from_bytes(peer.public_key)
+                .ok_or(EdhocError::SignatureVerification)?;
 
             // PRK_4e3m = PRK_3e2m for SIGN_SIGN (needed for MAC_3 and OSCORE export)
             self.state.prk_4e3m = self.state.prk_3e2m;
@@ -487,13 +482,8 @@ impl EdhocResponder {
                 &self.state.th_3,
                 peer.credential,
             )?;
-            let mac_3 = edhoc_kdf(
-                &self.state.prk_4e3m,
-                &self.state.th_3,
-                "MAC_3",
-                &context_3,
-                32,
-            )?;
+            // MAC_3 (label=6, context=context_3)
+            let mac_3 = edhoc_kdf(&self.state.prk_4e3m, LABEL_MAC_3, &context_3, 32)?;
             let m_3 = build_signature_structure(
                 pending.id_cred.as_bytes(),
                 &self.state.th_3,
@@ -505,9 +495,7 @@ impl EdhocResponder {
                 return Err(EdhocError::SignatureVerification);
             }
 
-            let mut credential_r = heapless::Vec::<u8, 80>::new();
-            encode_credential(&mut credential_r, self.pubkey.as_bytes())?;
-            self.state.th_4 = transcript_4(&self.state.th_3, &pending.plaintext, &credential_r)?;
+            self.state.th_4 = transcript_4(&self.state.th_3, &pending.plaintext, peer.credential)?;
             self.state.completed = true;
             self.state.lifecycle = Lifecycle::Complete;
 
@@ -530,12 +518,13 @@ impl EdhocResponder {
             return Err(OscoreError::NoContext);
         }
         // Use dedicated exporter for full master_secret/salt derivation + new_fresh.
-        // IDs: local c_r as sender_id for responder context.
+        // RFC 9528 Appendix A.1, Table 14: C_I is the Responder's Sender ID
+        // and C_R is its Recipient ID.
         export_context(
             &self.state.prk_4e3m,
             &self.state.th_4,
-            self.c_r.as_bytes(),
             self.state.c_i.as_bytes(),
+            self.c_r.as_bytes(),
         )
     }
 }
@@ -545,7 +534,7 @@ pub struct PendingMessage3 {
     /// Parsed ID_CRED from the initiator.
     id_cred: IdCred,
     /// Decrypted plaintext of Message 3.
-    pub(crate) plaintext: heapless::Vec<u8, 128>,
+    pub(crate) plaintext: SecretVec<128>,
     /// Byte offset where the signature begins.
     signature_offset: usize,
     /// Transcript binding at time of parsing.
