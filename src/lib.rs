@@ -174,6 +174,29 @@ pub struct SenderSequenceState {
     pub exhausted: bool,
 }
 
+/// Recipient-side replay state that should be persisted after each successful unprotect.
+///
+/// Without persistence, a reboot allows replay of every message the peer ever sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecipientReplayState {
+    /// Highest accepted incoming request sequence.
+    pub recipient_seq: u64,
+    /// Sliding window of accepted sequences (bit 0 = recipient_seq).
+    pub replay_window: u32,
+    /// Server role: highest request PIV for which a no-PIV response was sent.
+    pub response_seq: u64,
+    pub response_window: u32,
+    pub response_window_initialized: bool,
+    /// Client role: highest accepted peer response (by request seq).
+    pub received_response_seq: u64,
+    pub received_response_window: u32,
+    pub received_response_window_initialized: bool,
+    /// Client role: highest accepted peer response (by explicit PIV).
+    pub received_response_piv_seq: u64,
+    pub received_response_piv_window: u32,
+    pub received_response_piv_window_initialized: bool,
+}
+
 /// Stable identifier for one directional OSCORE sender context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Zeroize)]
 pub struct ContextId([u8; 32]);
@@ -185,24 +208,40 @@ impl ContextId {
     }
 }
 
-/// Atomic durable storage for an OSCORE sender sequence.
+/// Durable storage for OSCORE context state (sender sequence + recipient replay windows).
 ///
-/// Implementations MUST update `expected` to `next` atomically and return
-/// `Ok(false)` without changing storage when the current value differs.
-pub trait SenderStateStore {
+/// Sender state uses atomic compare-exchange (must be persisted BEFORE transmit).
+/// Recipient state is best-effort (persisted AFTER successful unprotect).
+pub trait ContextStateStore {
     /// Storage-specific failure.
     type Error;
 
-    /// Load state for exactly `context_id`.
-    fn load(&mut self, context_id: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error>;
+    /// Load sender state for exactly `context_id`.
+    fn load_sender(
+        &mut self,
+        context_id: &ContextId,
+    ) -> Result<Option<SenderSequenceState>, Self::Error>;
 
-    /// Atomically replace `expected` with `next` for exactly `context_id`.
-    fn compare_exchange(
+    /// Atomically replace sender `expected` with `next` for exactly `context_id`.
+    fn compare_exchange_sender(
         &mut self,
         context_id: &ContextId,
         expected: Option<SenderSequenceState>,
         next: SenderSequenceState,
     ) -> Result<bool, Self::Error>;
+
+    /// Load recipient replay state for `context_id`. Returns `None` on fresh context.
+    fn load_recipient(
+        &mut self,
+        context_id: &ContextId,
+    ) -> Result<Option<RecipientReplayState>, Self::Error>;
+
+    /// Persist recipient replay state after a successful unprotect.
+    fn save_recipient(
+        &mut self,
+        context_id: &ContextId,
+        state: &RecipientReplayState,
+    ) -> Result<(), Self::Error>;
 }
 
 /// Failure to construct a context against its authoritative sender-state store.
@@ -360,7 +399,7 @@ impl Context {
     ///
     /// This consumes an EDHOC-exported context and registers its initial sender state
     /// with a single `None -> initial` compare-and-swap. Existing state is never used.
-    pub fn register_fresh<S: SenderStateStore>(
+    pub fn register_fresh<S: ContextStateStore>(
         mut self,
         store: &mut S,
     ) -> Result<Self, ContextStoreError<S::Error>> {
@@ -368,7 +407,7 @@ impl Context {
             return Err(ContextStoreError::Oscore(OscoreError::InvalidParam));
         }
         if !store
-            .compare_exchange(&self.context_id, None, self.sender_sequence_state())
+            .compare_exchange_sender(&self.context_id, None, self.sender_sequence_state())
             .map_err(ContextStoreError::Storage)?
         {
             return Err(ContextStoreError::Conflict);
@@ -378,17 +417,23 @@ impl Context {
         Ok(self)
     }
 
-    /// Activate a context using sender state already present in its authoritative store.
-    pub fn restore_existing<S: SenderStateStore>(
+    /// Activate a context using state already present in its authoritative store.
+    pub fn restore_existing<S: ContextStateStore>(
         mut self,
         store: &mut S,
     ) -> Result<Self, ContextStoreError<S::Error>> {
         let state = store
-            .load(&self.context_id)
+            .load_sender(&self.context_id)
             .map_err(ContextStoreError::Storage)?
             .ok_or(ContextStoreError::Missing)?;
         self.set_sender_state(state)
             .map_err(ContextStoreError::Oscore)?;
+        if let Some(rs) = store
+            .load_recipient(&self.context_id)
+            .map_err(ContextStoreError::Storage)?
+        {
+            self.set_recipient_replay_state(rs);
+        }
         self.restored = true;
         self.active = true;
         self.allow_no_piv_response = false;
@@ -634,12 +679,44 @@ impl Context {
         }
     }
 
+    /// Snapshot of all recipient-side replay windows for persistence.
+    pub fn recipient_replay_state(&self) -> RecipientReplayState {
+        RecipientReplayState {
+            recipient_seq: self.recipient_seq.get(),
+            replay_window: self.replay_window,
+            response_seq: self.response_seq.get(),
+            response_window: self.response_window,
+            response_window_initialized: self.response_window_initialized,
+            received_response_seq: self.received_response_seq.get(),
+            received_response_window: self.received_response_window,
+            received_response_window_initialized: self.received_response_window_initialized,
+            received_response_piv_seq: self.received_response_piv_seq.get(),
+            received_response_piv_window: self.received_response_piv_window,
+            received_response_piv_window_initialized: self.received_response_piv_window_initialized,
+        }
+    }
+
+    /// Restore recipient-side replay windows from persisted state.
+    fn set_recipient_replay_state(&mut self, s: RecipientReplayState) {
+        self.recipient_seq = OscoreSeqNum::new(s.recipient_seq).unwrap_or_default();
+        self.replay_window = s.replay_window;
+        self.response_seq = OscoreSeqNum::new(s.response_seq).unwrap_or_default();
+        self.response_window = s.response_window;
+        self.response_window_initialized = s.response_window_initialized;
+        self.received_response_seq = OscoreSeqNum::new(s.received_response_seq).unwrap_or_default();
+        self.received_response_window = s.received_response_window;
+        self.received_response_window_initialized = s.received_response_window_initialized;
+        self.received_response_piv_seq = OscoreSeqNum::new(s.received_response_piv_seq).unwrap_or_default();
+        self.received_response_piv_window = s.received_response_piv_window;
+        self.received_response_piv_window_initialized = s.received_response_piv_window_initialized;
+    }
+
     /// Atomically reserve the next sender sequence in durable storage.
     ///
     /// Storage advances before this returns, so a crash can only skip the reserved
     /// sequence. A competing context restored from the same state receives
     /// [`ReservationError::Conflict`] and cannot encrypt with that sequence.
-    pub fn reserve_sender<S: SenderStateStore>(
+    pub fn reserve_sender<S: ContextStateStore>(
         &mut self,
         store: &mut S,
     ) -> Result<ReservedSender<'_>, ReservationError<S::Error>> {
@@ -664,7 +741,7 @@ impl Context {
         };
 
         if !store
-            .compare_exchange(&self.context_id, Some(expected), next)
+            .compare_exchange_sender(&self.context_id, Some(expected), next)
             .map_err(ReservationError::Storage)?
         {
             return Err(ReservationError::Conflict);
@@ -2312,6 +2389,7 @@ mod tests {
     struct TestStore {
         context_id: ContextId,
         state: SenderSequenceState,
+        recipient: Option<RecipientReplayState>,
     }
 
     impl TestStore {
@@ -2319,21 +2397,22 @@ mod tests {
             Self {
                 context_id: context.context_id(),
                 state: context.sender_sequence_state(),
+                recipient: None,
             }
         }
     }
 
-    impl SenderStateStore for TestStore {
+    impl ContextStateStore for TestStore {
         type Error = core::convert::Infallible;
 
-        fn load(
+        fn load_sender(
             &mut self,
             context_id: &ContextId,
         ) -> Result<Option<SenderSequenceState>, Self::Error> {
             Ok((*context_id == self.context_id).then_some(self.state))
         }
 
-        fn compare_exchange(
+        fn compare_exchange_sender(
             &mut self,
             context_id: &ContextId,
             expected: Option<SenderSequenceState>,
@@ -2344,6 +2423,24 @@ mod tests {
             }
             self.state = next;
             Ok(true)
+        }
+
+        fn load_recipient(
+            &mut self,
+            context_id: &ContextId,
+        ) -> Result<Option<RecipientReplayState>, Self::Error> {
+            Ok(if *context_id == self.context_id { self.recipient } else { None })
+        }
+
+        fn save_recipient(
+            &mut self,
+            context_id: &ContextId,
+            state: &RecipientReplayState,
+        ) -> Result<(), Self::Error> {
+            if *context_id == self.context_id {
+                self.recipient = Some(*state);
+            }
+            Ok(())
         }
     }
 
@@ -2625,10 +2722,10 @@ mod tests {
     fn fresh_context_activates_only_after_atomic_registration() {
         struct EmptyStore(Option<(ContextId, SenderSequenceState)>);
 
-        impl SenderStateStore for EmptyStore {
+        impl ContextStateStore for EmptyStore {
             type Error = core::convert::Infallible;
 
-            fn load(
+            fn load_sender(
                 &mut self,
                 context_id: &ContextId,
             ) -> Result<Option<SenderSequenceState>, Self::Error> {
@@ -2638,18 +2735,21 @@ mod tests {
                     .map(|(_, state)| state))
             }
 
-            fn compare_exchange(
+            fn compare_exchange_sender(
                 &mut self,
                 context_id: &ContextId,
                 expected: Option<SenderSequenceState>,
                 next: SenderSequenceState,
             ) -> Result<bool, Self::Error> {
-                if self.load(context_id)? != expected {
+                if self.load_sender(context_id)? != expected {
                     return Ok(false);
                 }
                 self.0 = Some((*context_id, next));
                 Ok(true)
             }
+
+            fn load_recipient(&mut self, _: &ContextId) -> Result<Option<RecipientReplayState>, Self::Error> { Ok(None) }
+            fn save_recipient(&mut self, _: &ContextId, _: &RecipientReplayState) -> Result<(), Self::Error> { Ok(()) }
         }
 
         let secret = [0x4c; KEY_LEN];
@@ -2680,6 +2780,7 @@ mod tests {
                 next_sequence: 7,
                 exhausted: false,
             },
+            recipient: None,
         };
         let mut context = Context::new(&secret, None, None, &[1], &[0])
             .unwrap()
@@ -2704,24 +2805,13 @@ mod tests {
     fn supplied_material_requires_existing_durable_state() {
         struct EmptyStore;
 
-        impl SenderStateStore for EmptyStore {
+        impl ContextStateStore for EmptyStore {
             type Error = core::convert::Infallible;
 
-            fn load(
-                &mut self,
-                _context_id: &ContextId,
-            ) -> Result<Option<SenderSequenceState>, Self::Error> {
-                Ok(None)
-            }
-
-            fn compare_exchange(
-                &mut self,
-                _context_id: &ContextId,
-                _expected: Option<SenderSequenceState>,
-                _next: SenderSequenceState,
-            ) -> Result<bool, Self::Error> {
-                panic!("load_existing must not write")
-            }
+            fn load_sender(&mut self, _: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> { Ok(None) }
+            fn compare_exchange_sender(&mut self, _: &ContextId, _: Option<SenderSequenceState>, _: SenderSequenceState) -> Result<bool, Self::Error> { panic!("load_existing must not write") }
+            fn load_recipient(&mut self, _: &ContextId) -> Result<Option<RecipientReplayState>, Self::Error> { Ok(None) }
+            fn save_recipient(&mut self, _: &ContextId, _: &RecipientReplayState) -> Result<(), Self::Error> { Ok(()) }
         }
 
         assert!(matches!(
@@ -2744,23 +2834,15 @@ mod tests {
             barrier: Arc<Barrier>,
         }
 
-        impl SenderStateStore for SharedStore {
+        impl ContextStateStore for SharedStore {
             type Error = core::convert::Infallible;
 
-            fn load(
-                &mut self,
-                context_id: &ContextId,
-            ) -> Result<Option<SenderSequenceState>, Self::Error> {
+            fn load_sender(&mut self, context_id: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> {
                 let record = self.record.lock().unwrap();
                 Ok((*context_id == record.0).then_some(record.1))
             }
 
-            fn compare_exchange(
-                &mut self,
-                context_id: &ContextId,
-                expected: Option<SenderSequenceState>,
-                next: SenderSequenceState,
-            ) -> Result<bool, Self::Error> {
+            fn compare_exchange_sender(&mut self, context_id: &ContextId, expected: Option<SenderSequenceState>, next: SenderSequenceState) -> Result<bool, Self::Error> {
                 self.barrier.wait();
                 let mut record = self.record.lock().unwrap();
                 if *context_id != record.0 || expected != Some(record.1) {
@@ -2769,6 +2851,9 @@ mod tests {
                 record.1 = next;
                 Ok(true)
             }
+
+            fn load_recipient(&mut self, _: &ContextId) -> Result<Option<RecipientReplayState>, Self::Error> { Ok(None) }
+            fn save_recipient(&mut self, _: &ContextId, _: &RecipientReplayState) -> Result<(), Self::Error> { Ok(()) }
         }
 
         let secret = [0x45; KEY_LEN];
@@ -2811,38 +2896,28 @@ mod tests {
             barrier: Arc<Barrier>,
         }
 
-        impl SenderStateStore for SharedEmptyStore {
+        impl ContextStateStore for SharedEmptyStore {
             type Error = core::convert::Infallible;
 
-            fn load(
-                &mut self,
-                context_id: &ContextId,
-            ) -> Result<Option<SenderSequenceState>, Self::Error> {
-                Ok(self
-                    .record
-                    .lock()
-                    .unwrap()
+            fn load_sender(&mut self, context_id: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> {
+                Ok(self.record.lock().unwrap()
                     .filter(|(stored_id, _)| stored_id == context_id)
                     .map(|(_, state)| state))
             }
 
-            fn compare_exchange(
-                &mut self,
-                context_id: &ContextId,
-                expected: Option<SenderSequenceState>,
-                next: SenderSequenceState,
-            ) -> Result<bool, Self::Error> {
+            fn compare_exchange_sender(&mut self, context_id: &ContextId, expected: Option<SenderSequenceState>, next: SenderSequenceState) -> Result<bool, Self::Error> {
                 self.barrier.wait();
                 let mut record = self.record.lock().unwrap();
-                let current = record
-                    .filter(|(stored_id, _)| stored_id == context_id)
-                    .map(|(_, state)| state);
+                let current = record.filter(|(stored_id, _)| stored_id == context_id).map(|(_, state)| state);
                 if current != expected {
                     return Ok(false);
                 }
                 *record = Some((*context_id, next));
                 Ok(true)
             }
+
+            fn load_recipient(&mut self, _: &ContextId) -> Result<Option<RecipientReplayState>, Self::Error> { Ok(None) }
+            fn save_recipient(&mut self, _: &ContextId, _: &RecipientReplayState) -> Result<(), Self::Error> { Ok(()) }
         }
 
         let secret = [0x47; KEY_LEN];

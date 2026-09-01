@@ -18,7 +18,7 @@ use super::sign::SIG_LEN;
 use super::transcript::{build_context_2, build_signature_structure};
 use super::types::{ConnectionId, IdCredReference, SecretVec};
 use super::{EdhocError, KEY_LEN_32, Lifecycle};
-use crate::{ContextId, OscoreError, SenderSequenceState, SenderStateStore};
+use crate::{ContextId, ContextStateStore, OscoreError, RecipientReplayState, SenderSequenceState};
 use aes::Aes128;
 use core::num::NonZeroU32;
 use hex_literal::hex;
@@ -59,27 +59,23 @@ impl TestStore {
     }
 }
 
-impl SenderStateStore for TestStore {
+impl ContextStateStore for TestStore {
     type Error = core::convert::Infallible;
 
-    fn load(&mut self, context_id: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> {
-        Ok((*context_id == self.context_id)
-            .then_some(self.state)
-            .flatten())
+    fn load_sender(&mut self, context_id: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> {
+        Ok((*context_id == self.context_id).then_some(self.state).flatten())
     }
 
-    fn compare_exchange(
-        &mut self,
-        context_id: &ContextId,
-        expected: Option<SenderSequenceState>,
-        next: SenderSequenceState,
-    ) -> Result<bool, Self::Error> {
+    fn compare_exchange_sender(&mut self, context_id: &ContextId, expected: Option<SenderSequenceState>, next: SenderSequenceState) -> Result<bool, Self::Error> {
         if *context_id != self.context_id || expected != self.state {
             return Ok(false);
         }
         self.state = Some(next);
         Ok(true)
     }
+
+    fn load_recipient(&mut self, _: &ContextId) -> Result<Option<RecipientReplayState>, Self::Error> { Ok(None) }
+    fn save_recipient(&mut self, _: &ContextId, _: &RecipientReplayState) -> Result<(), Self::Error> { Ok(()) }
 }
 
 struct TestRng(u64);

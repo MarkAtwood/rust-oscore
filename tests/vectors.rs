@@ -4,7 +4,8 @@
 //! Tests using RFC 8613 test vectors from tests/vectors/oscore.json
 
 use oscore::{
-    Context, ContextId, OscoreError, SenderSequenceState, SenderStateStore, validate_option,
+    Context, ContextId, ContextStateStore, OscoreError, RecipientReplayState,
+    SenderSequenceState, validate_option,
 };
 
 struct TestStore(SenderSequenceState);
@@ -18,28 +19,23 @@ impl TestStore {
     }
 }
 
-impl SenderStateStore for TestStore {
+impl ContextStateStore for TestStore {
     type Error = core::convert::Infallible;
 
-    fn load(
-        &mut self,
-        _context_id: &ContextId,
-    ) -> Result<Option<SenderSequenceState>, Self::Error> {
+    fn load_sender(&mut self, _: &ContextId) -> Result<Option<SenderSequenceState>, Self::Error> {
         Ok(Some(self.0))
     }
 
-    fn compare_exchange(
-        &mut self,
-        _context_id: &ContextId,
-        expected: Option<SenderSequenceState>,
-        next: SenderSequenceState,
-    ) -> Result<bool, Self::Error> {
+    fn compare_exchange_sender(&mut self, _: &ContextId, expected: Option<SenderSequenceState>, next: SenderSequenceState) -> Result<bool, Self::Error> {
         if Some(self.0) != expected {
             return Ok(false);
         }
         self.0 = next;
         Ok(true)
     }
+
+    fn load_recipient(&mut self, _: &ContextId) -> Result<Option<RecipientReplayState>, Self::Error> { Ok(None) }
+    fn save_recipient(&mut self, _: &ContextId, _: &RecipientReplayState) -> Result<(), Self::Error> { Ok(()) }
 }
 use serde::Deserialize;
 use std::fs;
